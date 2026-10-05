@@ -1,6 +1,6 @@
 {
   "name": "didban-worker3",
-  "version": "3.0.0",
+  "version": "3.0.2",
   "description": "Didban Smart Market — Worker 3 (Market AI Interpreter & Quant Advisory Microservice)",
   "main": "src/worker.js",
   "type": "module",
@@ -22,6 +22,6 @@
   "author": "Didban Smart Market Team",
   "license": "UNLICENSED",
   "devDependencies": {
-    "wrangler": "^3.109.0"
+    "wrangler": "^4.147.0"
   }
 }

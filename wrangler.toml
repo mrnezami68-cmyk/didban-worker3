@@ -1,0 +1,23 @@
+name = "market-ai-interpreter"
+main = "src/worker.js"
+compatibility_date = "2026-10-05"
+compatibility_flags = ["nodejs_compat"]
+
+# اتصال هوش مصنوعی لبه کلودفلر
+[ai]
+binding = "AI"
+
+# ۱. اتصال دیتابیس قیمت‌ها و داده‌های بازار
+[[d1_databases]]
+binding = "DB"
+database_name = "market_db"
+database_id = "c99c8fed-bbcd-46a5-af06-594c969bb1d7"
+
+# ۲. اتصال دیتابیس دانشنامه و مفاهیم مشترک دارالفنون
+[[d1_databases]]
+binding = "KNOWLEDGE_DB"
+database_name = "market_knowledge_db"
+database_id = "5d57217e-6f65-43a1-a121-35e36f5f9b25"
+
+[observability]
+enabled = true
