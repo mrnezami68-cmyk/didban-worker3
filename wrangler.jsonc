@@ -7,24 +7,10 @@
     "nodejs_compat"
   ],
 
-  // اتصال درگاه هوش مصنوعی لبه کلودفلر
+  // اتصال مستقیم هوش مصنوعی لبه کلودفلر
   "ai": {
     "binding": "AI"
   },
-
-  // پایگاه‌های داده دوگانه D1 (قیمت‌ها و دانشنامه مشترک دارالفنون)
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "market_db",
-      "database_id": "market-db-id"
-    },
-    {
-      "binding": "KNOWLEDGE_DB",
-      "database_name": "market_knowledge_db",
-      "database_id": "market-knowledge-db-id"
-    }
-  ],
 
   "observability": {
     "enabled": true
