@@ -7,10 +7,22 @@
     "nodejs_compat"
   ],
 
-  // اتصال مستقیم هوش مصنوعی لبه کلودفلر
   "ai": {
     "binding": "AI"
   },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "market_db",
+      "database_id": "c99c8fed-bbcd-46a5-af06-594c969bb1d7"
+    },
+    {
+      "binding": "KNOWLEDGE_DB",
+      "database_name": "market_knowledge_db",
+      "database_id": "5d57217e-6f65-43a1-a121-35e36f5f9b25"
+    }
+  ],
 
   "observability": {
     "enabled": true
