@@ -1,0 +1,27 @@
+{
+  "name": "didban-worker3",
+  "version": "3.0.0",
+  "description": "Didban Smart Market — Worker 3 (Market AI Interpreter & Quant Advisory Microservice)",
+  "main": "src/worker.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run",
+    "types": "wrangler types",
+    "test": "node --check src/worker.js"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "workers-ai",
+    "d1-database",
+    "didban",
+    "market-watcher",
+    "quantitative-finance"
+  ],
+  "author": "Didban Smart Market Team",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "wrangler": "^3.109.0"
+  }
+}
