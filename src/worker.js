@@ -946,12 +946,7 @@ async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
       const kdb = envOrDb.KNOWLEDGE_DB || envOrDb.DB || (typeof envOrDb.prepare === 'function' ? envOrDb : null);
 
       if (kdb && typeof kdb.prepare === 'function') {
-        let stmt;
-        if (knowledgeQuery.category) {
-          stmt = kdb.prepare(`SELECT id, category, keywords, title, summary, content FROM knowledge_base WHERE category = ? ORDER BY id ASC`).bind(String(knowledgeQuery.category).toLowerCase().trim());
-        } else {
-          stmt = kdb.prepare(`SELECT id, category, keywords, title, summary, content FROM knowledge_base ORDER BY id ASC`);
-        }
+        const stmt = kdb.prepare(`SELECT id, category, keywords, title, summary, content FROM knowledge_base ORDER BY id ASC`);
 
         const dbRes = await stmt.all();
         rawItems = (dbRes && Array.isArray(dbRes.results)) ? dbRes.results : [];
