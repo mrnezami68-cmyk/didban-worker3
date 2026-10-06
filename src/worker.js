@@ -2436,13 +2436,7 @@ ${JSON.stringify(evidenceContract, null, 2)}
 // موتور فال‌بک قطعی دترمینیستیک (Deterministic Fallback Engine)
 // ============================================================================
 
-/**
- * تبدیل ارقام به فارسی در ورکر ۳
- */
-function toFaDigits(str) {
-  if (str === null || str === undefined) return '—';
-  return String(str).replace(/[0-9]/g, d => '۰۱۲۳۴۵۶۷۸۹'[+d]);
-}
+/* toFaDigits defined above */
 
 /**
  * تولید روایت ۳ لایه‌ای دترمینیستیک بدون نیاز به AI در شرایط اضطراری (Phase P0)
