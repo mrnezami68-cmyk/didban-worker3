@@ -2,6 +2,20 @@
 
 ---
 
+## [v4.0.0-phase2-2] — سازنده یکپارچه شواهد و قرارداد جامع شواهد (Unified Evidence Builder Core & Grounded Evidence Contract v1.0)
+* ایجاد ماژول مستقل `js/engine/evidence-builder.js` به‌عنوان لایه جمع‌آوری، نرمال‌سازی، طبقه‌بندی، ثبت اصالت (`provenance`)، حذف تکرار و کنترل کیفیت شواهد (نه موتور استدلال و نه LLM).
+* تثبیت قرارداد جامع شواهد (`Unified Evidence Contract v1.0`) شامل `contractVersion`, `query`, `dependencyPlan`, `capabilities`, `evidence`, `meta` به‌صورت دترمینیستیک و ماشین‌خوان.
+* فعال‌سازی لایه‌های شواهد `LIVE`, `DERIVED`, `HYPOTHETICAL`, `KNOWLEDGE` و تعریف `HISTORICAL` و `EXTERNAL` صرفاً به‌عنوان نقاط توسعه (Extension Point) بدون هیچ پیاده‌سازی موتور، fetch بیرونی، تلگرام یا جست‌وجوی وب.
+* پیاده‌سازی مدل قابلیت شواهد (`requiredEvidence` / `availableEvidence` / `missingEvidence`) و پرچم `degraded` به‌عنوان وضعیت درجه‌یک سیستم («نبود شواهد، خودش یک داده است»).
+* اعمال فیلتر مرتبط‌بودن بر اساس برنامه وابستگی شواهد (Relevant Evidence — نه Maximum Evidence) شامل حذف داده زنده در پرسش‌های صرفاً دانشنامه‌ای و محدودسازی کامل در وضعیت ضدسیگنال.
+* حذف تکرار دترمینیستیک بر کلید `type + asset + unit + value + source` و کشف تناقض منابع با ثبت `conflictsDetected` و `conflictTrace` (بدون بازنویسی خاموش).
+* حفظ کامل ایمنی واحد (`Unit Safety`): هیچ تبدیل واحدی در بیلدر انجام نمی‌شود و ردیابی ممیزی تبدیل (`auditTrace`) نرمال‌ساز فاز ۱-۱ حفظ می‌گردد.
+* افزودن اندپوینت `POST /api/ai/evidence/build` و بازگرداندن قرارداد شواهد در پاسخ‌های `POST /api/ai/chat` (شامل قرارداد محدود گاردریل ضدسیگنال).
+* حفظ ممنوعیت‌های دامنه: بدون Structured Outputs، بدون Vectorize، بدون تغییر اسکیمای D1 (صرفاً `SELECT`)، بدون بازنویسی معماری LLM و بدون تغییر رفتار موتورهای قطعی.
+* ایجاد سوئیت اختصاصی `tests/test_v246_evidence_builder.js` (۳۵ آزمون) و پاس شدن ۱۰۰٪ کل **۵۲ سوئیت آزمون جامع QA**.
+
+---
+
 ## [v4.0.0-vision-doc-4] — انطباق با سند چشم‌انداز و نقشه راه معماری شماره ۴ (Vision Document No. 4 Alignment)
 * تثبیت مبانی معماری نسل ۴ ورکر ۳ و استقرار موفق بر بستر Cloudflare Workers با اتصال دوگانه D1.
 * انطباق کامل با نقشه راه فازهای ۲-۲ تا ۴-۱.

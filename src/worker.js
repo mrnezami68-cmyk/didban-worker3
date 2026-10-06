@@ -22,6 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
+const WORKER_PHASE = 'Phase 2-2 (Unified Evidence Builder Core v1.0)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -100,12 +101,15 @@ export default {
       return new Response(JSON.stringify({
         name: 'Didban Smart Market — AI Interpreter & Quant Advisory Worker',
         version: WORKER_VERSION,
+        phase: WORKER_PHASE,
         status: 'online',
         endpoints: [
           { path: '/api/health', method: 'GET', description: 'System health & binding status' },
           { path: '/api/ai/chat', method: 'POST', description: 'Interactive AI Advisor conversational analysis' },
           { path: '/api/ai/interpret', method: 'POST', description: 'Multi-horizon 3-layer narrative synthesis' },
-          { path: '/api/ai/validate', method: 'POST', description: 'Anti-hallucination evidence validation' }
+          { path: '/api/ai/validate', method: 'POST', description: 'Anti-hallucination evidence validation' },
+          { path: '/api/ai/knowledge/retrieve', method: 'POST', description: 'Canonical D1 knowledge retrieval core' },
+          { path: '/api/ai/evidence/build', method: 'POST', description: 'Unified Evidence Contract builder (Phase 2-2)' }
         ]
       }), { status: 200, headers: corsHeaders });
     }
@@ -132,7 +136,13 @@ export default {
           fallback: hasOpenRouter ? 'OPENROUTER (Configured)' : 'OPENROUTER (Key Missing)',
           safeFallback: 'DETERMINISTIC_ENGINE (Active)'
         },
+        phase: WORKER_PHASE,
         knowledgeRetriever: 'ENABLED (Phase 2-1 Deterministic Core)',
+        evidenceBuilder: 'ENABLED (Phase 2-2 Unified Evidence Contract v1.0)',
+        evidenceSources: {
+          active: ['LIVE', 'DERIVED', 'HYPOTHETICAL', 'KNOWLEDGE'],
+          extensionPoints: ['HISTORICAL', 'EXTERNAL']
+        },
         edgeCacheSize: edgeMemoryCache.size,
         antiSignalWordsCount: FORBIDDEN_WORDS.length,
         timestamp: new Date().toISOString()
@@ -270,10 +280,26 @@ export default {
         const isDirectSignalRequest = FORBIDDEN_WORDS.some(w => lowerMsg.includes(w.toLowerCase()));
 
         if (isDirectSignalRequest) {
+          // قرارداد شواهد محدود: گاردریل ضدسیگنال هرگز با جمع‌آوری شواهد بیشتر دور زده نمی‌شود
+          const restrictedContract = buildUnifiedEvidenceContract({
+            query: userMsg,
+            cir: {
+              intent: { primary: 'ANTI_SIGNAL_RESTRICTED', secondary: [], confidence: 1.0 },
+              entities: [],
+              operations: [],
+              requiresCalculation: false,
+              requiresLiveEvidence: false,
+              requiresKnowledge: false,
+              evidencePlan: { required: [], optional: [] },
+              knowledgeQuery: null
+            },
+            rawEvidence: {}
+          });
           return new Response(JSON.stringify({
             success: true,
             reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.',
             source: 'ANTI_SIGNAL_GUARD',
+            unifiedEvidence: restrictedContract,
             timestamp: new Date().toISOString()
           }), { headers: corsHeaders });
         }
@@ -294,6 +320,7 @@ export default {
             reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.',
             source: 'ANTI_SIGNAL_GUARD',
             interpretation: formatStructuredLog(queryAnalysis),
+            unifiedEvidence: buildUnifiedEvidenceContract({ query: userMsg, cir: queryAnalysis, rawEvidence: {} }),
             timestamp: new Date().toISOString()
           }), { headers: corsHeaders });
         }
@@ -312,6 +339,12 @@ export default {
             source: 'CLARIFICATION_ENGINE',
             interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
             retrievedKnowledge,
+            unifiedEvidence: buildUnifiedEvidenceContract({
+              query: userMsg,
+              cir: queryAnalysis,
+              rawEvidence: normalizedEvidence,
+              options: { alreadyNormalized: true }
+            }),
             timestamp: new Date().toISOString()
           }), { headers: corsHeaders });
         }
@@ -336,6 +369,14 @@ export default {
                 source: 'DETERMINISTIC_WHAT_IF_ENGINE',
                 interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
                 retrievedKnowledge,
+                unifiedEvidence: buildUnifiedEvidenceContract({
+                  query: userMsg,
+                  cir: queryAnalysis,
+                  rawEvidence: normalizedEvidence,
+                  retrievedKnowledge,
+                  whatIfAst,
+                  options: { alreadyNormalized: true }
+                }),
                 timestamp: new Date().toISOString()
               }), { headers: corsHeaders });
             }
@@ -406,12 +447,22 @@ export default {
           sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
         }
 
+        // ۷. ساخت قرارداد جامع شواهد (Phase 2-2) بر اساس شواهد موجود و برنامه وابستگی
+        const unifiedEvidenceContract = buildUnifiedEvidenceContract({
+          query: userMsg,
+          cir: queryAnalysis,
+          rawEvidence: normalizedEvidence,
+          retrievedKnowledge,
+          options: { alreadyNormalized: true }
+        });
+
         return new Response(JSON.stringify({
           success: true,
           reply: replyText,
           source: sourceUsed,
           interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
           retrievedKnowledge,
+          unifiedEvidence: unifiedEvidenceContract,
           timestamp: new Date().toISOString()
         }), { headers: corsHeaders });
 
@@ -423,9 +474,61 @@ export default {
       }
     }
 
+    // ========================================================================
+    // POST /api/ai/evidence/build — ساخت قرارداد جامع شواهد (Phase 2-2)
+    // وظیفه: جمع‌آوری، طبقه‌بندی و کنترل کیفیت شواهد (نه تولید تحلیل یا پیش‌بینی)
+    // ========================================================================
+    if (url.pathname === '/api/ai/evidence/build' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const query = String(body.message || body.query || '').trim();
+        const todayEvidence = (body.todayEvidence && typeof body.todayEvidence === 'object') ? body.todayEvidence : {};
+        const hasNormalizedInput = !!(body.normalizedEvidence && typeof body.normalizedEvidence === 'object');
+        const rawEvidence = hasNormalizedInput ? body.normalizedEvidence : todayEvidence;
+        const history = Array.isArray(body.history) ? body.history : [];
+
+        if (!query) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'متن پرسش (message یا query) نمی‌تواند خالی باشد.'
+          }), { status: 400, headers: corsHeaders });
+        }
+
+        const cir = analyzeQuery(query, history, todayEvidence);
+        const whatIfAst = body.whatIfAst || ((cir.intent.primary === 'WHAT_IF' || cir.intent.primary === 'SCENARIO_COMPARISON') ? parseWhatIfQuery(query, history) : null);
+
+        let retrievedKnowledge = null;
+        if (cir.requiresKnowledge || cir.knowledgeQuery) {
+          retrievedKnowledge = await retrieveKnowledge(cir.knowledgeQuery, env);
+        }
+
+        const contract = buildUnifiedEvidenceContract({
+          query,
+          cir,
+          rawEvidence,
+          retrievedKnowledge,
+          whatIfAst,
+          historical: Array.isArray(body.historical) ? body.historical : [],
+          external: Array.isArray(body.external) ? body.external : [],
+          options: { alreadyNormalized: hasNormalizedInput }
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          evidenceContract: contract
+        }), { headers: corsHeaders });
+
+      } catch (err) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'خطای ساخت قرارداد شواهد: ' + err.message
+        }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     return new Response(JSON.stringify({
       error: 'مسیر یافت نشد (Endpoint Not Found)',
-      availableEndpoints: ['GET /api/health', 'POST /api/ai/interpret', 'POST /api/ai/validate', 'POST /api/ai/chat', 'POST /api/ai/knowledge/retrieve']
+      availableEndpoints: ['GET /api/health', 'POST /api/ai/interpret', 'POST /api/ai/validate', 'POST /api/ai/chat', 'POST /api/ai/knowledge/retrieve', 'POST /api/ai/evidence/build']
     }), { status: 404, headers: corsHeaders });
   }
 };
@@ -1194,6 +1297,527 @@ function normalizeEvidenceMap(todayEvidence = {}) {
     map[k] = norm;
   }
   return map;
+}
+
+// ============================================================================
+// موتور یکپارچه‌سازی شواهد و قرارداد جامع شواهد (Unified Evidence Builder Core v1.0)
+// Phase 2-2 — دیدبان هوشمند بازار
+// وظیفه: جمع‌آوری، نرمال‌سازی، طبقه‌بندی، ثبت اصالت (provenance)، حذف تکرار،
+// کشف تناقض و کنترل کیفیت شواهد — نه تولید تحلیل، پیش‌بینی یا توصیه معاملاتی.
+// ============================================================================
+
+const EVIDENCE_CONTRACT_VERSION = '1.0';
+
+const EVIDENCE_TYPES = {
+  LIVE: 'LIVE',
+  HISTORICAL: 'HISTORICAL',     // Extension Point (فاز ۲-۲: بدون پیاده‌سازی موتور)
+  DERIVED: 'DERIVED',
+  HYPOTHETICAL: 'HYPOTHETICAL',
+  KNOWLEDGE: 'KNOWLEDGE',
+  EXTERNAL: 'EXTERNAL',         // Extension Point (فاز ۲-۲: بدون fetch بیرونی)
+  CACHED: 'CACHED',
+  FALLBACK: 'FALLBACK'
+};
+
+const EVIDENCE_SOURCE_PRIORITY = {
+  LIVE: 100,
+  HISTORICAL: 80,
+  DERIVED: 70,
+  HYPOTHETICAL: 60,
+  KNOWLEDGE: 50,
+  CACHED: 40,
+  FALLBACK: 10
+};
+
+function createEvidenceItem(params = {}) {
+  return {
+    id: params.id || `ev_${Math.random().toString(36).substring(2, 9)}`,
+    type: params.type || EVIDENCE_TYPES.LIVE,
+    asset: params.asset || null,
+    source: params.source || 'SYSTEM',
+    value: (params.value !== undefined) ? params.value : null,
+    unit: params.unit || '',
+    timestamp: params.timestamp || new Date().toISOString(),
+    provenance: params.provenance || 'DIRECT_INPUT',
+    confidence: (typeof params.confidence === 'number') ? params.confidence : 1.0,
+    relevance: (typeof params.relevance === 'number') ? params.relevance : 1.0,
+    metadata: params.metadata || {}
+  };
+}
+
+// نگاشت کلیدهای تابلوی بازار به دارایی‌های کانونیکال
+const EVIDENCE_ASSET_KEY_MAP = {
+  usd: { asset: 'USD', unit: 'TOMAN' },
+  dollar: { asset: 'USD', unit: 'TOMAN' },
+  usdt: { asset: 'USDT', unit: 'TOMAN' },
+  tether: { asset: 'USDT', unit: 'TOMAN' },
+  sekee: { asset: 'COIN', unit: 'TOMAN' },
+  coin: { asset: 'COIN', unit: 'TOMAN' },
+  emami: { asset: 'COIN', unit: 'TOMAN' },
+  gold18: { asset: 'GOLD18', unit: 'TOMAN_PER_GRAM' },
+  xau: { asset: 'XAU', unit: 'USD_PER_OUNCE' },
+  xag: { asset: 'XAG', unit: 'USD_PER_OUNCE' },
+  silver1g: { asset: 'XAG_GRAM', unit: 'USD_PER_GRAM' },
+  oil: { asset: 'OIL', unit: 'USD_PER_BARREL' },
+  brent: { asset: 'OIL', unit: 'USD_PER_BARREL' },
+  tse_index: { asset: 'TSE_INDEX', unit: 'INDEX_POINT' },
+  tseindex: { asset: 'TSE_INDEX', unit: 'INDEX_POINT' },
+  tse_equal: { asset: 'TSE_EQUAL', unit: 'INDEX_POINT' },
+  tseequal: { asset: 'TSE_EQUAL', unit: 'INDEX_POINT' },
+  btc: { asset: 'BTC', unit: 'USD' },
+  eth: { asset: 'ETH', unit: 'USD' },
+  sol: { asset: 'SOL', unit: 'USD' },
+  dxy: { asset: 'DXY', unit: 'INDEX_POINT' }
+};
+
+/**
+ * استخراج شواهد زنده (LIVE) — بدون هیچ محاسبه یا تبدیل واحد جدید
+ * از normalizeEvidenceMap / normalizePriceContract موجود استفاده می‌کند.
+ */
+function extractLiveEvidence(rawEvidence = {}, entityFilter = null, options = {}) {
+  const liveItems = [];
+  if (!rawEvidence || typeof rawEvidence !== 'object') return liveItems;
+
+  const normalized = (options && options.normalized === true)
+    ? rawEvidence
+    : normalizeEvidenceMap(rawEvidence);
+
+  // آرایه خالی به معنای «هیچ شواهدی مجاز نیست» (وضعیت ضدسیگنال محدود) است
+  const allowedAssets = Array.isArray(entityFilter)
+    ? new Set(entityFilter.map(e => String(e).toUpperCase().trim()))
+    : null;
+
+  for (const [k, v] of Object.entries(normalized)) {
+    if (v === null || v === undefined) continue;
+    const cleanKey = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const meta = EVIDENCE_ASSET_KEY_MAP[cleanKey];
+    if (!meta) continue;
+    if (allowedAssets && !allowedAssets.has(meta.asset)) continue;
+
+    let value = v;
+    let unit = meta.unit;
+    let sourceName = 'LIVE_FEED';
+    let auditTrace = null;
+    let change24h = null;
+
+    if (typeof v === 'object' && v !== null) {
+      value = (v.value !== undefined) ? v.value : null;
+      unit = v.unit && v.unit !== 'UNKNOWN' ? v.unit : meta.unit;
+      sourceName = v.source || 'LIVE_FEED';
+      auditTrace = v.auditTrace || null;
+      change24h = (v.change24h !== undefined) ? v.change24h : null;
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      liveItems.push(createEvidenceItem({
+        id: `live_${meta.asset.toLowerCase()}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        type: EVIDENCE_TYPES.LIVE,
+        asset: meta.asset,
+        source: sourceName,
+        value: value,
+        unit: unit,
+        provenance: 'NORMALIZED_FEED',
+        confidence: 1.0,
+        relevance: 1.0,
+        metadata: { change24h, rawKey: k, auditTrace }
+      }));
+    }
+  }
+
+  return liveItems;
+}
+
+/**
+ * استخراج شواهد اشتقاقی (DERIVED) با ردیابی فرمول و ورودی‌ها
+ */
+function extractDerivedEvidence(liveItems = []) {
+  const derivedItems = [];
+  if (!Array.isArray(liveItems) || liveItems.length === 0) return derivedItems;
+
+  const priceMap = {};
+  for (const item of liveItems) {
+    if (item.type === EVIDENCE_TYPES.LIVE && item.asset && typeof item.value === 'number') {
+      priceMap[item.asset] = item.value;
+    }
+  }
+
+  const usd = priceMap['USD'];
+  const xau = priceMap['XAU'];
+  const xag = priceMap['XAG'];
+  const gold18 = priceMap['GOLD18'];
+  const coin = priceMap['COIN'];
+  const usdt = priceMap['USDT'];
+
+  if (usd > 0 && xau > 0) {
+    const intrinsicGold18 = Math.round((xau * usd * 0.750) / 31.1035);
+    derivedItems.push(createEvidenceItem({
+      id: `derived_gold18_intrinsic_${Date.now()}`,
+      type: EVIDENCE_TYPES.DERIVED,
+      asset: 'GOLD18',
+      source: 'CANONICAL_FORMULA',
+      value: intrinsicGold18,
+      unit: 'TOMAN_PER_GRAM',
+      provenance: 'MATHEMATICAL_DERIVATION',
+      relevance: 0.95,
+      metadata: { formula: '(XAU * USD * 0.750) / 31.1035', inputs: { usd, xau }, targetMetric: 'INTRINSIC_VALUE' }
+    }));
+
+    derivedItems.push(createEvidenceItem({
+      id: `derived_mithqal17_${Date.now()}`,
+      type: EVIDENCE_TYPES.DERIVED,
+      asset: 'MITHQAL',
+      source: 'CANONICAL_FORMULA',
+      value: Math.round(intrinsicGold18 * 4.3318),
+      unit: 'TOMAN',
+      provenance: 'MATHEMATICAL_DERIVATION',
+      relevance: 0.90,
+      metadata: { formula: 'Gold18_Intrinsic * 4.3318', targetMetric: 'THEORETICAL_MITHQAL' }
+    }));
+
+    const intrinsicCoin = Math.round((8.133 * 0.900 * xau * usd) / 31.1035);
+    derivedItems.push(createEvidenceItem({
+      id: `derived_coin_intrinsic_${Date.now()}`,
+      type: EVIDENCE_TYPES.DERIVED,
+      asset: 'COIN',
+      source: 'CANONICAL_FORMULA',
+      value: intrinsicCoin,
+      unit: 'TOMAN',
+      provenance: 'MATHEMATICAL_DERIVATION',
+      relevance: 0.95,
+      metadata: { formula: '(8.133 * 0.900 * XAU * USD) / 31.1035', inputs: { usd, xau }, targetMetric: 'COIN_INTRINSIC_VALUE' }
+    }));
+
+    if (coin > 0) {
+      derivedItems.push(createEvidenceItem({
+        id: `derived_coin_bubble_${Date.now()}`,
+        type: EVIDENCE_TYPES.DERIVED,
+        asset: 'COIN',
+        source: 'CANONICAL_FORMULA',
+        value: Number((((coin - intrinsicCoin) / intrinsicCoin) * 100).toFixed(2)),
+        unit: 'PERCENT',
+        provenance: 'MATHEMATICAL_DERIVATION',
+        relevance: 0.95,
+        metadata: {
+          formula: '((MarketPrice - IntrinsicValue) / IntrinsicValue) * 100',
+          inputs: { marketPrice: coin, intrinsicValue: intrinsicCoin },
+          bubbleAmountToman: coin - intrinsicCoin,
+          marketPrice: coin,
+          intrinsicPrice: intrinsicCoin,
+          targetMetric: 'BUBBLE_PERCENTAGE'
+        }
+      }));
+    }
+
+    if (gold18 > 0) {
+      derivedItems.push(createEvidenceItem({
+        id: `derived_gold18_bubble_${Date.now()}`,
+        type: EVIDENCE_TYPES.DERIVED,
+        asset: 'GOLD18',
+        source: 'CANONICAL_FORMULA',
+        value: Number((((gold18 - intrinsicGold18) / intrinsicGold18) * 100).toFixed(2)),
+        unit: 'PERCENT',
+        provenance: 'MATHEMATICAL_DERIVATION',
+        relevance: 0.90,
+        metadata: {
+          formula: '((MarketPrice - IntrinsicValue) / IntrinsicValue) * 100',
+          inputs: { marketPrice: gold18, intrinsicValue: intrinsicGold18 },
+          bubbleAmountToman: gold18 - intrinsicGold18,
+          marketPrice: gold18,
+          intrinsicPrice: intrinsicGold18,
+          targetMetric: 'GOLD18_BUBBLE_PERCENTAGE'
+        }
+      }));
+    }
+  }
+
+  if (xau > 0 && xag > 0) {
+    derivedItems.push(createEvidenceItem({
+      id: `derived_gold_silver_ratio_${Date.now()}`,
+      type: EVIDENCE_TYPES.DERIVED,
+      asset: 'XAU_XAG',
+      source: 'CANONICAL_FORMULA',
+      value: Number((xau / xag).toFixed(2)),
+      unit: 'RATIO',
+      provenance: 'MATHEMATICAL_DERIVATION',
+      relevance: 0.85,
+      metadata: { formula: 'XAU / XAG', targetMetric: 'GOLD_SILVER_RATIO' }
+    }));
+  }
+
+  if (usdt > 0 && usd > 0) {
+    derivedItems.push(createEvidenceItem({
+      id: `derived_usdt_spread_${Date.now()}`,
+      type: EVIDENCE_TYPES.DERIVED,
+      asset: 'USDT_USD',
+      source: 'CANONICAL_FORMULA',
+      value: usdt - usd,
+      unit: 'TOMAN',
+      provenance: 'MATHEMATICAL_DERIVATION',
+      relevance: 0.85,
+      metadata: { formula: 'USDT - USD', inputs: { usdt, usd }, spreadPercent: Number((((usdt - usd) / usd) * 100).toFixed(2)), targetMetric: 'TETHER_USD_SPREAD' }
+    }));
+  }
+
+  return derivedItems;
+}
+
+/**
+ * استخراج شواهد فرضی (HYPOTHETICAL) از AST سناریوی What-If
+ */
+function extractHypotheticalEvidence(whatIfAst = {}) {
+  const items = [];
+  if (!whatIfAst || typeof whatIfAst !== 'object') return items;
+
+  const assumptions = Array.isArray(whatIfAst.assumptions)
+    ? whatIfAst.assumptions
+    : (Array.isArray(whatIfAst.scenarios) ? whatIfAst.scenarios.flatMap(s => (s && s.assumptions) || []) : []);
+
+  for (const asm of assumptions) {
+    if (!asm || !asm.asset) continue;
+    items.push(createEvidenceItem({
+      id: `hypo_${String(asm.asset).toLowerCase()}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      type: EVIDENCE_TYPES.HYPOTHETICAL,
+      asset: asm.asset,
+      source: 'USER_HYPOTHESIS',
+      value: asm.value,
+      unit: asm.mode === 'PERCENT_CHANGE' ? 'PERCENT_SHOCK' : (asm.mode === 'TARGET_PRICE' ? 'TARGET_PRICE' : 'ABSOLUTE_SHOCK'),
+      provenance: 'WHAT_IF_SCENARIO_PARSER',
+      relevance: 1.0,
+      metadata: {
+        mode: asm.mode,
+        direction: asm.direction || null,
+        rawText: asm.rawText || '',
+        scenarioId: asm.scenarioId || 'DEFAULT',
+        scenarioLabel: whatIfAst.type || 'WHAT_IF'
+      }
+    }));
+  }
+
+  return items;
+}
+
+/**
+ * استخراج شواهد دانشنامه‌ای (KNOWLEDGE) از قرارداد بازیابی فاز ۲-۱
+ */
+function extractKnowledgeEvidence(retrievalResult = {}) {
+  const items = [];
+  if (!retrievalResult || typeof retrievalResult !== 'object') return items;
+
+  const results = Array.isArray(retrievalResult.results) ? retrievalResult.results : [];
+  for (const res of results) {
+    if (!res || !res.id) continue;
+    items.push(createEvidenceItem({
+      id: `knowledge_${res.id}`,
+      type: EVIDENCE_TYPES.KNOWLEDGE,
+      asset: res.category ? String(res.category).toUpperCase() : 'MACRO',
+      source: (retrievalResult.meta && retrievalResult.meta.source) || 'D1_KNOWLEDGE_DB',
+      value: res.summary || res.title || '',
+      unit: 'CANONICAL_DEFINITION',
+      provenance: 'KNOWLEDGE_RETRIEVER_CORE',
+      confidence: typeof res.relevanceScore === 'number' ? res.relevanceScore : 1.0,
+      relevance: typeof res.relevanceScore === 'number' ? res.relevanceScore : 1.0,
+      metadata: {
+        id: res.id,
+        title: res.title,
+        category: res.category,
+        matchReasons: res.matchReasons || []
+      }
+    }));
+  }
+
+  return items;
+}
+
+/**
+ * حذف تکرار دترمینیستیک (Deterministic Deduplication)
+ * کلید: type + asset + unit + value + source
+ */
+function deduplicateEvidenceItems(items = []) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  const deduped = [];
+  for (const item of items) {
+    if (!item) continue;
+    const key = `${item.type}:${item.asset || 'NO_ASSET'}:${item.unit}:${String(item.value)}:${item.source}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(item);
+    }
+  }
+  return deduped;
+}
+
+/**
+ * کشف تناقضات شواهد — بدون بازنویسی خاموش (No Silent Overwrite)
+ */
+function detectEvidenceConflicts(liveItems = []) {
+  const buckets = {};
+  const conflicts = [];
+  let conflictsDetected = false;
+
+  for (const item of liveItems) {
+    if (!item || !item.asset) continue;
+    if (!buckets[item.asset]) buckets[item.asset] = [];
+    buckets[item.asset].push(item);
+  }
+
+  for (const [asset, items] of Object.entries(buckets)) {
+    if (items.length > 1) {
+      const uniqueValues = new Set(items.map(i => `${i.unit}:${i.value}`));
+      if (uniqueValues.size > 1) {
+        conflictsDetected = true;
+        conflicts.push({
+          asset,
+          conflictingItems: items.map(i => ({
+            id: i.id,
+            source: i.source,
+            type: i.type,
+            value: i.value,
+            unit: i.unit,
+            timestamp: i.timestamp,
+            priority: EVIDENCE_SOURCE_PRIORITY[i.type] || 0
+          }))
+        });
+      }
+    }
+  }
+
+  return { conflictsDetected, conflictTrace: conflicts };
+}
+
+/**
+ * مدل قابلیت شواهد: نیازمند / موجود / مفقود + وضعیت degraded
+ * «نبود شواهد، خودش یک داده است.» (Missing evidence is information)
+ */
+function evaluateEvidenceCapabilities(cir = {}, activeEvidence = {}) {
+  const requiredEvidence = [];
+  const availableEvidence = [];
+  const missingEvidence = [];
+
+  const intent = (cir.intent && cir.intent.primary) || 'UNKNOWN';
+  const rawQuery = String(cir.query || '');
+
+  if (cir.requiresLiveEvidence || ['MARKET_STATUS', 'MARKET_ANALYSIS', 'ASSET_ANALYSIS', 'WHAT_IF', 'SCENARIO_COMPARISON'].includes(intent)) {
+    requiredEvidence.push('LIVE_MARKET_DATA');
+  }
+  if (cir.requiresCalculation || ['CALCULATION', 'WHAT_IF', 'SCENARIO_COMPARISON'].includes(intent)) {
+    requiredEvidence.push('DETERMINISTIC_CALCULATION');
+  }
+  if (['WHAT_IF', 'SCENARIO_COMPARISON'].includes(intent)) {
+    requiredEvidence.push('SCENARIO_ENGINE');
+  }
+  if (cir.requiresKnowledge || intent === 'KNOWLEDGE_QUERY' || cir.knowledgeQuery) {
+    requiredEvidence.push('KNOWLEDGE');
+  }
+
+  const historicalPattern = /(هفته گذشته|ماه گذشته|ماه‌ گذشته|سال گذشته|دیروز|پریشب|تاریخچه|سابقه|روند تاریخی|هفت روز|۳۰ روز|سی روز)/i;
+  if (historicalPattern.test(rawQuery)) {
+    requiredEvidence.push('HISTORICAL_DATA');
+  }
+
+  const externalPattern = /(اخبار|خبر جدید|فدرال رزرو|فدرال|ترامپ|بیانیه|نشست|اجلاس|تصمیم بانک مرکزی|تقویم اقتصادی)/i;
+  if (externalPattern.test(rawQuery)) {
+    requiredEvidence.push('EXTERNAL_NEWS');
+  }
+
+  if (Array.isArray(activeEvidence.live) && activeEvidence.live.length > 0) availableEvidence.push('LIVE_MARKET_DATA');
+  if (Array.isArray(activeEvidence.derived) && activeEvidence.derived.length > 0) availableEvidence.push('DETERMINISTIC_CALCULATION');
+  if (Array.isArray(activeEvidence.hypothetical) && activeEvidence.hypothetical.length > 0) availableEvidence.push('SCENARIO_ENGINE');
+  if (Array.isArray(activeEvidence.knowledge) && activeEvidence.knowledge.length > 0) availableEvidence.push('KNOWLEDGE');
+  if (Array.isArray(activeEvidence.historical) && activeEvidence.historical.length > 0) availableEvidence.push('HISTORICAL_DATA');
+  if (Array.isArray(activeEvidence.external) && activeEvidence.external.length > 0) availableEvidence.push('EXTERNAL_NEWS');
+
+  const uniqueRequired = Array.from(new Set(requiredEvidence));
+  for (const req of uniqueRequired) {
+    if (!availableEvidence.includes(req)) missingEvidence.push(req);
+  }
+
+  return {
+    requiredEvidence: uniqueRequired,
+    availableEvidence,
+    missingEvidence,
+    degraded: missingEvidence.length > 0
+  };
+}
+
+/**
+ * ساخت قرارداد جامع شواهد (Unified Evidence Contract v1.0)
+ */
+function buildUnifiedEvidenceContract(params = {}) {
+  const rawQuery = params.query || '';
+  const cir = params.cir || analyzeQuery(rawQuery);
+  const rawEvidence = params.rawEvidence || {};
+  const retrievedKnowledge = params.retrievedKnowledge || null;
+  const whatIfAst = params.whatIfAst || null;
+  const options = params.options || {};
+
+  const intent = (cir.intent && cir.intent.primary) || 'UNKNOWN';
+  const entities = Array.isArray(cir.entities) ? cir.entities.map(e => (e && e.value) || e) : [];
+
+  // فیلتر شواهد زنده بر اساس Dependency Plan (Relevant Evidence — نه Maximum Evidence)
+  let liveFilter = null;
+  if (intent === 'ANTI_SIGNAL_RESTRICTED') {
+    liveFilter = [];
+  } else if (cir.evidencePlan && Array.isArray(cir.evidencePlan.required) && cir.evidencePlan.required.length > 0) {
+    const allowed = new Set([...cir.evidencePlan.required, ...((cir.evidencePlan && cir.evidencePlan.optional) || [])]);
+    entities.forEach(e => allowed.add(e));
+    liveFilter = Array.from(allowed);
+  } else if (!cir.requiresLiveEvidence) {
+    // پرسش دانشنامه‌ای / مفهومی: داده زنده وارد کانتکست نمی‌شود
+    liveFilter = [];
+  }
+
+  const live = deduplicateEvidenceItems(extractLiveEvidence(rawEvidence, liveFilter, { normalized: options.alreadyNormalized === true }));
+  const derived = deduplicateEvidenceItems(extractDerivedEvidence(live));
+  const hypothetical = deduplicateEvidenceItems(extractHypotheticalEvidence(whatIfAst));
+  const knowledge = deduplicateEvidenceItems(extractKnowledgeEvidence(retrievedKnowledge));
+
+  // نقاط توسعه آینده: در فاز ۲-۲ هیچ داده جعلی ساخته نمی‌شود و این لایه‌ها خالی می‌مانند
+  const historical = Array.isArray(params.historical) ? params.historical : [];
+  const external = Array.isArray(params.external) ? params.external : [];
+
+  const evidence = { live, historical, derived, hypothetical, knowledge, external };
+  const capabilities = evaluateEvidenceCapabilities(Object.assign({ query: rawQuery }, cir), evidence);
+  const { conflictsDetected, conflictTrace } = detectEvidenceConflicts(live);
+
+  const totalEvidence = live.length + historical.length + derived.length + hypothetical.length + knowledge.length + external.length;
+  const sourcesUsed = [];
+  if (live.length > 0) sourcesUsed.push('LIVE');
+  if (historical.length > 0) sourcesUsed.push('HISTORICAL');
+  if (derived.length > 0) sourcesUsed.push('DERIVED');
+  if (hypothetical.length > 0) sourcesUsed.push('HYPOTHETICAL');
+  if (knowledge.length > 0) sourcesUsed.push('KNOWLEDGE');
+  if (external.length > 0) sourcesUsed.push('EXTERNAL');
+
+  return {
+    contractVersion: EVIDENCE_CONTRACT_VERSION,
+    query: {
+      raw: rawQuery,
+      intent: intent,
+      entities: entities,
+      keywords: (cir.knowledgeQuery && cir.knowledgeQuery.keywords) || []
+    },
+    dependencyPlan: {
+      requiredEvidence: (cir.evidencePlan && cir.evidencePlan.required) || [],
+      optionalEvidence: (cir.evidencePlan && cir.evidencePlan.optional) || []
+    },
+    capabilities: {
+      requiredEvidence: capabilities.requiredEvidence,
+      availableEvidence: capabilities.availableEvidence,
+      missingEvidence: capabilities.missingEvidence
+    },
+    evidence,
+    meta: {
+      totalEvidence,
+      sourcesUsed,
+      degraded: capabilities.degraded,
+      conflictsDetected,
+      conflictTrace,
+      historicalSupport: 'EXTENSION_POINT_ONLY (Phase 2-2)',
+      externalSupport: 'EXTENSION_POINT_ONLY (Phase 2-2)',
+      timestamp: new Date().toISOString()
+    }
+  };
 }
 
 function parseWhatIfQuery(rawText, recentContext = []) {
