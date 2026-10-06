@@ -1471,7 +1471,7 @@ function extractDerivedEvidence(liveItems = []) {
       unit: 'TOMAN',
       provenance: 'MATHEMATICAL_DERIVATION',
       relevance: 0.90,
-      metadata: { formula: 'Gold18_Intrinsic * 4.3318', targetMetric: 'THEORETICAL_MITHQAL' }
+      metadata: { formula: 'Gold18_Intrinsic * 4.3318', inputs: { gold18Intrinsic: intrinsicGold18 }, targetMetric: 'THEORETICAL_MITHQAL' }
     }));
 
     const intrinsicCoin = Math.round((8.133 * 0.900 * xau * usd) / 31.1035);
@@ -1540,7 +1540,7 @@ function extractDerivedEvidence(liveItems = []) {
       unit: 'RATIO',
       provenance: 'MATHEMATICAL_DERIVATION',
       relevance: 0.85,
-      metadata: { formula: 'XAU / XAG', targetMetric: 'GOLD_SILVER_RATIO' }
+      metadata: { formula: 'XAU / XAG', inputs: { xau, xag }, targetMetric: 'GOLD_SILVER_RATIO' }
     }));
   }
 
