@@ -2,6 +2,12 @@
 
 ---
 
+## [v4.0.0-vision-doc-4] — انطباق با سند چشم‌انداز و نقشه راه معماری شماره ۴ (Vision Document No. 4 Alignment)
+* تثبیت مبانی معماری نسل ۴ ورکر ۳ و استقرار موفق بر بستر Cloudflare Workers با اتصال دوگانه D1.
+* انطباق کامل با نقشه راه فازهای ۲-۲ تا ۴-۱.
+
+---
+
 ## [v4.0.0-phase2-1] — هسته بازیابی قطعی دانش کلان اقتصادی و اتصال مستقیم به D1 (Knowledge Retrieval Core & Multi-Level D1 Ranking)
 * اتصال کانونیکال `knowledgeQuery` به پایگاه داده `market_knowledge_db` (جدول `knowledge_base`) در D1.
 * پیاده‌سازی الگوریتم رتبه‌بندی قطعی ۵‌سطحی (`Exact Topic` > `Exact Keyword` > `Title Match` > `Summary Match` > `Category Scope`).
