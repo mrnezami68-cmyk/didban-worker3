@@ -2,6 +2,17 @@
 
 ---
 
+## [v4.0.0-phase2-3b] — حافظه کاری معنایی و ماشین حالت چندنوبته در ورکر ۳ (Phase 2-3B: Working Memory & Multi-Turn Anaphora State Machine)
+* درج بلوک کامل Phase 2-3B در ورکر ۳ به‌صورت **تولید مکانیکی از ماژول مرجع** `js/engine/intent-entity-engine.js` — هم‌ارزی رفتاری تضمین‌شده و بدون منطق resolver موازی یا دست‌نویس متفاوت.
+* تثبیت `WM_CONTRACT_VERSION = '1.0'`، حالت‌های `IDLE, ASSET_CONTEXT, TOPIC_CONTEXT, SCENARIO_CONTEXT, COMPARISON_CONTEXT, AWAITING_CLARIFICATION, RESTRICTED, EXPIRED` و سقف‌های ساختاری (`topicStack=3`, `scenarioLedger=4`, `TTL=3`).
+* فعال‌سازی `resolveTurn` / `resolveTurnSequence` / `formatMemoryLog` در سطح اسکریپت ورکر با اتصال به پارسر What-If موجود (`parseWhatIfQuery`) — بدون تجزیه موازی و بدون ساخت مسیر استدلال دوم.
+* اعتبارسنجی و ترمیم حافظه: صفر نگهداری قیمت بازار/مقدار مشتق/درصد/اسپرد/حباب/snapshot/evidence؛ تشخیص کلید ممنوعه، کلید ناشناخته، عدد مشکوک بازار و توکن عددی بزرگ.
+* مرزهای اعتماد `USER_TEXT` / `SYSTEM_STATE` / `DETERMINISTIC_STATE` / `EVIDENCE` / `LLM_OUTPUT` و حذف کانال دستیار از بافت ورودی موتور؛ متن دستیار نمی‌تواند واقعیت عددی بازار را وارد state کند.
+* به‌روزرسانی `WORKER_PHASE` به `Phase 2-3B (Working Memory & Multi-Turn Anaphora State Machine)` و اعلام قابلیت `workingMemory` در `GET /api/health` (با حفظ `WORKER_VERSION` جهت سازگاری گاردریل).
+* حفظ کامل لایه‌های پیشین: قرارداد جامع شواهد فاز ۲-۲، بازیابی دانش فاز ۲-۱، موتور نیت/موجودیت فاز ۱-۲ و نرمال‌ساز/شبیه‌ساز فاز ۱-۱ (بدون تغییر رفتار).
+* حفظ ممنوعیت‌های دامنه: بدون Structured Outputs، بدون Vectorize، بدون تغییر اسکیمای D1 (صرفاً `SELECT`)، بدون KV/Durable Object و بدون ماندگاری گفتگو در ورکر (ورکر در این فاز Stateless می‌ماند).
+* افزودن سوئیت `tests/test_v247_working_memory.js` (**۶۶ آزمون رفتاری**) و پاس شدن ۱۰۰٪ کل **۵۳ سوئیت آزمون جامع QA** بدون هیچ رگرسیون در فازهای پیشین.
+
 ## [v4.0.0-phase2-2] — سازنده یکپارچه شواهد و قرارداد جامع شواهد (Unified Evidence Builder Core & Grounded Evidence Contract v1.0)
 * ایجاد ماژول مستقل `js/engine/evidence-builder.js` به‌عنوان لایه جمع‌آوری، نرمال‌سازی، طبقه‌بندی، ثبت اصالت (`provenance`)، حذف تکرار و کنترل کیفیت شواهد (نه موتور استدلال و نه LLM).
 * تثبیت قرارداد جامع شواهد (`Unified Evidence Contract v1.0`) شامل `contractVersion`, `query`, `dependencyPlan`, `capabilities`, `evidence`, `meta` به‌صورت دترمینیستیک و ماشین‌خوان.

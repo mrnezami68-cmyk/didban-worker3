@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-2 (Unified Evidence Builder Core v1.0)';
+const WORKER_PHASE = 'Phase 2-3B (Working Memory & Multi-Turn Anaphora State Machine)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -139,6 +139,7 @@ export default {
         phase: WORKER_PHASE,
         knowledgeRetriever: 'ENABLED (Phase 2-1 Deterministic Core)',
         evidenceBuilder: 'ENABLED (Phase 2-2 Unified Evidence Contract v1.0)',
+        workingMemory: 'ENABLED (Phase 2-3B Semantic Working Memory v1.0 — client-carried, stateless worker)',
         evidenceSources: {
           active: ['LIVE', 'DERIVED', 'HYPOTHETICAL', 'KNOWLEDGE'],
           extensionPoints: ['HISTORICAL', 'EXTERNAL']
@@ -885,6 +886,1073 @@ function analyzeQuery(rawText, recentContext = [], todayEvidence = {}) {
     status: 'FALLBACK'
   };
 }
+
+/* ==========================================================================
+   Phase 2-3B — Working Memory & Multi-Turn Anaphora State Machine
+   لایه حافظه معنایی چندنوبته: قرارداد نسخه‌دار + حل‌کننده قطعی بافت + ماشین حالت
+   اصول:
+     • «Semantic Context persists. Market Values do not.»
+     • حافظه هرگز قیمت/درصد/مشتق بازار را نگه نمی‌دارد (فقط فرض عددی خود کاربر).
+     • هیچ منطق نیت/موجودیت موازی ساخته نمی‌شود؛ analyzeQuery همان منبع حقیقت است.
+     • حل بافت کاملاً قطعی است و در شکست، شفاف‌سازی می‌دهد — نه حدس.
+   ========================================================================== */
+
+const WM_CONTRACT_VERSION = '1.0';
+
+// وضعیت‌های ماشین حالت (State Machine)
+const WM_STATES = {
+  IDLE: 'IDLE',
+  ASSET_CONTEXT: 'ASSET_CONTEXT',
+  TOPIC_CONTEXT: 'TOPIC_CONTEXT',
+  SCENARIO_CONTEXT: 'SCENARIO_CONTEXT',
+  COMPARISON_CONTEXT: 'COMPARISON_CONTEXT',
+  AWAITING_CLARIFICATION: 'AWAITING_CLARIFICATION',
+  RESTRICTED: 'RESTRICTED',
+  EXPIRED: 'EXPIRED'
+};
+
+// مرزهای اعتماد (Trust Boundary)
+const WM_TRUST = {
+  USER_TEXT: 'USER_TEXT',
+  SYSTEM_STATE: 'SYSTEM_STATE',
+  DETERMINISTIC_STATE: 'DETERMINISTIC_STATE',
+  EVIDENCE: 'EVIDENCE',
+  LLM_OUTPUT: 'LLM_OUTPUT'
+};
+
+const WM_TRUST_CLASS = {
+  USER_TEXT: 'TRUSTED_INTENT',
+  SYSTEM_STATE: 'TRUSTED_STATE',
+  DETERMINISTIC_STATE: 'TRUSTED',
+  EVIDENCE: 'TRUSTED_FOR_VALUES',
+  LLM_OUTPUT: 'UNTRUSTED_FOR_FACTS'
+};
+
+const WM_LIMITS = {
+  MAX_TOPIC_STACK_DEPTH: 3,
+  MAX_SCENARIO_LEDGER: 4,
+  PENDING_CLARIFICATION_TTL_TURNS: 3
+};
+
+// کلیدهای مجاز قرارداد (Whitelist سخت‌گیرانه)
+const WM_ALLOWED_KEYS = [
+  'contractVersion', 'turnIndex', 'activeIntent', 'activeAssets', 'activeTopic', 'topicStack',
+  'comparisonSet', 'timeframe', 'scenario', 'scenarioLedger', 'pendingClarification',
+  'resolvedReferences', 'lastUserCorrection', 'state', 'updatedAtTurn',
+  'mode', 'assets', 'label', 'horizon', 'requiresHistoricalData', 'requiresForecastCapability',
+  'scenarioId', 'parentScenarioId', 'asset', 'value', 'direction', 'queryText', 'multiIndex',
+  'id', 'missing', 'originalIntent', 'createdAtTurn', 'originalText',
+  'kind', 'from', 'to', 'source', 'trust', 'ref'
+];
+
+// کلیدهای ممنوعه (هرگونه ارزش بازار / مشتق / شواهد)
+const WM_FORBIDDEN_KEYS = [
+  'price', 'prices', 'currentPrice', 'marketPrice', 'intrinsicPrice', 'bubble', 'bubblePercent',
+  'spread', 'spreadPercent', 'change', 'change24h', 'changePercent', 'snapshot', 'snapshots',
+  'evidence', 'derived', 'live', 'historical', 'hypothetical', 'knowledge', 'marketData',
+  'usd', 'usdt', 'gold18', 'sekee', 'xau', 'xag', 'oil', 'tse', 'tseIndex', 'tseEqual',
+  'silver1g', 'btc', 'eth', 'sol', 'dxy', 'toman', 'rial'
+];
+
+// مسیرهای عددی مجاز (فقط فرض عددی خود کاربر و شمارنده‌های ساختاری)
+const WM_NUMERIC_ALLOWED_PATHS = ['turnIndex', 'updatedAtTurn', 'scenario.value', 'scenario.multiIndex', 'pendingClarification.createdAtTurn'];
+const WM_LEDGER_NUMERIC_PATH = /^scenarioLedger\.\d+\.(value|multiIndex)$/;
+
+// نرمال‌سازی سبک متن برای تطبیق قطعی (بدون حذف معنا)
+const wmNormalize = (t) => String(t || '')
+  .toLowerCase()
+  .replace(/[\u200c\u200e\u200f\u202a-\u202e]/g, '')
+  .replace(/ي/g, 'ی')
+  .replace(/ك/g, 'ک')
+  .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+  .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+// کمینه‌ی تبدیل ارقام فارسی/عربی برای تشخیص فرض عددی کاربر
+const wmToEnDigits = (t) => String(t || '')
+  .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+  .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+/**
+ * واژه‌نمای کانونیکال دارایی برای بازسازی پرسش (Synonym Canonicalizer)
+ * همیشه نخستین مترادف تاکسونومی — برای تطبیق قطعی موتور موجود استفاده می‌شود.
+ */
+const wmAssetSynonym = (asset) => {
+  const list = ASSET_TAXONOMY[asset];
+  return (Array.isArray(list) && list.length > 0) ? list[0] : null;
+};
+
+/**
+ * تمرکز بر یک دارایی (سناریو/پیگیری) — اگر دارایی عضو مجموعه مقایسه فعال باشد،
+ * مجموعه حفظ می‌شود تا «حافظه مجموعه مقایسه» بین نوبت‌ها از دست نرود.
+ */
+const focusAsset = (asset, mem) => {
+  const cs = mem.comparisonSet || { mode: 'SINGLE', assets: [] };
+  if (cs.mode === 'COMPARE' && Array.isArray(cs.assets) && cs.assets.length >= 2 && cs.assets.includes(asset)) {
+    mem.comparisonSet = { mode: 'COMPARE', assets: cs.assets.slice() };
+    return;
+  }
+  mem.comparisonSet = { mode: 'SINGLE', assets: asset ? [asset] : [] };
+};
+
+/* --------------------------------------------------------------------------
+   ۱) Temporal Resolver — تشخیص قطعی افق زمانی (بدون ساخت موتور تاریخی/پیش‌بینی)
+   -------------------------------------------------------------------------- */
+const TEMPORAL_RULES = [
+  { label: 'TODAY', patterns: ['امروز', 'الان', 'همین حالا', 'این لحظه', 'الان چنده'], horizon: 'CURRENT', rh: false, rf: false },
+  { label: 'PAST_WEEK', patterns: ['هفته گذشته', 'هفته قبل', 'هفته پیش', 'هفت روز گذشته', 'هفت روز اخیر', 'سابقه هفته'], horizon: 'HISTORICAL', rh: true, rf: false },
+  { label: 'PAST_MONTH', patterns: ['ماه گذشته', 'ماه قبل', 'ماه پیش', 'سی روز گذشته', '۳۰ روز گذشته'], horizon: 'HISTORICAL', rh: true, rf: false },
+  { label: 'YESTERDAY', patterns: ['دیروز', 'پریشب'], horizon: 'HISTORICAL', rh: true, rf: false },
+  { label: 'END_OF_WEEK', patterns: ['تا آخر هفته', 'تا اخر هفته', 'پایان هفته', 'آخر هفته'], horizon: 'FORECAST', rh: false, rf: true },
+  { label: 'END_OF_MONTH', patterns: ['تا آخر ماه', 'پایان ماه', 'آخر ماه'], horizon: 'FORECAST', rh: false, rf: true },
+  { label: 'NEXT_WEEK', patterns: ['هفته آینده', 'هفته بعد', 'هفته اینده'], horizon: 'FORECAST', rh: false, rf: true },
+  { label: 'NEXT_MONTH', patterns: ['ماه آینده', 'ماه بعد', 'ماه اینده'], horizon: 'FORECAST', rh: false, rf: true },
+  { label: 'NEXT_DAYS', patterns: ['چند روز آینده', 'چند روز بعد', 'روزهای آینده', 'تا چند روز', 'هفته آینده'], horizon: 'FORECAST', rh: false, rf: true },
+  { label: 'THIS_WEEK', patterns: ['هفته جاری', 'این هفته', 'هفته جاری'], horizon: 'AMBIGUOUS', rh: true, rf: false },
+  { label: 'THIS_MONTH', patterns: ['این ماه', 'ماه جاری'], horizon: 'AMBIGUOUS', rh: true, rf: false },
+  { label: 'TOMORROW', patterns: ['فردا'], horizon: 'FORECAST', rh: false, rf: true }
+];
+
+/**
+ * تشخیص قطعی افق زمانی از متن کاربر
+ * خروجی: { label, matched, horizon, requiresHistoricalData, requiresForecastCapability }
+ */
+const resolveTemporal = (rawText) => {
+  const s = wmNormalize(rawText);
+  if (!s) {
+    return { label: null, matched: null, horizon: 'CURRENT', requiresHistoricalData: false, requiresForecastCapability: false };
+  }
+  for (const rule of TEMPORAL_RULES) {
+    for (const p of rule.patterns) {
+      if (s.includes(p)) {
+        return {
+          label: rule.label,
+          matched: p,
+          horizon: rule.horizon,
+          requiresHistoricalData: !!rule.rh,
+          requiresForecastCapability: !!rule.rf
+        };
+      }
+    }
+  }
+  return { label: null, matched: null, horizon: 'CURRENT', requiresHistoricalData: false, requiresForecastCapability: false };
+};
+
+/* --------------------------------------------------------------------------
+   ۲) Working Memory Contract v1.0
+   -------------------------------------------------------------------------- */
+const createWorkingMemory = () => ({
+  contractVersion: WM_CONTRACT_VERSION,
+  turnIndex: 0,
+  activeIntent: null,
+  activeAssets: [],
+  activeTopic: null,
+  topicStack: [],
+  comparisonSet: { mode: 'SINGLE', assets: [] },
+  timeframe: {
+    label: null,
+    horizon: 'CURRENT',
+    requiresHistoricalData: false,
+    requiresForecastCapability: false
+  },
+  scenario: null,
+  scenarioLedger: [],
+  pendingClarification: null,
+  resolvedReferences: [],
+  lastUserCorrection: null,
+  state: WM_STATES.IDLE,
+  updatedAtTurn: 0
+});
+
+/**
+ * اعتبارسنجی قرارداد حافظه: ممنوعیت مطلق ارزش بازار + whitelist کلیدها
+ */
+const validateWorkingMemory = (memory) => {
+  const violations = [];
+  const walk = (node, path) => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, path ? `${path}.${i}` : String(i)));
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        const childPath = path ? `${path}.${k}` : k;
+        if (WM_FORBIDDEN_KEYS.includes(k)) {
+          violations.push({ type: 'FORBIDDEN_KEY', path: childPath });
+        } else if (!WM_ALLOWED_KEYS.includes(k)) {
+          violations.push({ type: 'UNKNOWN_KEY', path: childPath });
+        }
+        walk(v, childPath);
+      }
+      return;
+    }
+    if (typeof node === 'number') {
+      const allowed = WM_NUMERIC_ALLOWED_PATHS.includes(path) || WM_LEDGER_NUMERIC_PATH.test(path);
+      if (!allowed) violations.push({ type: 'NUMERIC_MARKET_VALUE_SUSPECT', path, value: node });
+    }
+    if (typeof node === 'string') {
+      // توکن‌های عددی بزرگ (≥ ۶ رقم) به‌عنوان ارزش بازار در حافظه معنایی مجاز نیستند؛
+      // تنها استثنا: فرض عددی خود کاربر در دامنه سناریو (value) که بخشی از قرارداد v1.0 است
+      const assumptionScoped = WM_NUMERIC_ALLOWED_PATHS.includes(path) || WM_LEDGER_NUMERIC_PATH.test(path);
+      if (!assumptionScoped) {
+        const tokens = wmToEnDigits(node).match(/\d+/g) || [];
+        if (tokens.some(t => t.length >= 6)) violations.push({ type: 'LARGE_NUMERIC_TOKEN', path });
+      }
+    }
+  };
+  walk(memory, '');
+  return { clean: violations.length === 0, violations };
+};
+
+/**
+ * نرمال‌سازی/ترمیم حافظه خام ورودی (Defensive Normalization)
+ */
+const normalizeWorkingMemory = (raw) => {
+  const base = createWorkingMemory();
+  if (!raw || typeof raw !== 'object' || raw.contractVersion !== WM_CONTRACT_VERSION) {
+    return base;
+  }
+  const mem = base;
+  mem.turnIndex = Number.isFinite(raw.turnIndex) ? raw.turnIndex : 0;
+  mem.updatedAtTurn = Number.isFinite(raw.updatedAtTurn) ? raw.updatedAtTurn : mem.turnIndex;
+  mem.activeIntent = typeof raw.activeIntent === 'string' ? raw.activeIntent : null;
+  mem.activeAssets = Array.isArray(raw.activeAssets)
+    ? raw.activeAssets.filter(a => Object.prototype.hasOwnProperty.call(ASSET_TAXONOMY, a))
+    : [];
+  mem.activeTopic = (raw.activeTopic && typeof raw.activeTopic === 'object' && typeof raw.activeTopic.value === 'string')
+    ? { kind: raw.activeTopic.kind === 'KNOWLEDGE' ? 'KNOWLEDGE' : 'ASSET', value: raw.activeTopic.value, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] }
+    : null;
+  mem.topicStack = Array.isArray(raw.topicStack)
+    ? raw.topicStack.filter(t => t && typeof t.value === 'string').slice(-WM_LIMITS.MAX_TOPIC_STACK_DEPTH)
+      .map(t => ({ kind: t.kind === 'KNOWLEDGE' ? 'KNOWLEDGE' : 'ASSET', value: t.value }))
+    : [];
+  mem.comparisonSet = {
+    mode: (raw.comparisonSet && raw.comparisonSet.mode === 'COMPARE') ? 'COMPARE' : 'SINGLE',
+    assets: (raw.comparisonSet && Array.isArray(raw.comparisonSet.assets))
+      ? raw.comparisonSet.assets.filter(a => Object.prototype.hasOwnProperty.call(ASSET_TAXONOMY, a))
+      : []
+  };
+  const tf = raw.timeframe || {};
+  mem.timeframe = {
+    label: typeof tf.label === 'string' ? tf.label : null,
+    horizon: ['CURRENT', 'HISTORICAL', 'FORECAST', 'AMBIGUOUS'].includes(tf.horizon) ? tf.horizon : 'CURRENT',
+    requiresHistoricalData: !!tf.requiresHistoricalData,
+    requiresForecastCapability: !!tf.requiresForecastCapability
+  };
+  const sc = raw.scenario;
+  mem.scenario = (sc && typeof sc === 'object' && typeof sc.asset === 'string' && Object.prototype.hasOwnProperty.call(ASSET_TAXONOMY, sc.asset))
+    ? {
+      scenarioId: typeof sc.scenarioId === 'string' ? sc.scenarioId : null,
+      parentScenarioId: typeof sc.parentScenarioId === 'string' ? sc.parentScenarioId : null,
+      asset: sc.asset,
+      mode: typeof sc.mode === 'string' ? sc.mode : 'PERCENT_CHANGE',
+      value: Number.isFinite(sc.value) ? sc.value : null,
+      direction: (['UP', 'DOWN', 'NONE'].includes(sc.direction)) ? sc.direction : 'UP',
+      queryText: typeof sc.queryText === 'string' ? sc.queryText.slice(0, 300) : null,
+      multiIndex: Number.isFinite(sc.multiIndex) ? sc.multiIndex : null
+    }
+    : null;
+  mem.scenarioLedger = Array.isArray(raw.scenarioLedger)
+    ? raw.scenarioLedger.filter(x => x && typeof x.asset === 'string').slice(-WM_LIMITS.MAX_SCENARIO_LEDGER).map(x => ({
+      scenarioId: typeof x.scenarioId === 'string' ? x.scenarioId : null,
+      parentScenarioId: typeof x.parentScenarioId === 'string' ? x.parentScenarioId : null,
+      asset: x.asset,
+      mode: typeof x.mode === 'string' ? x.mode : 'PERCENT_CHANGE',
+      value: Number.isFinite(x.value) ? x.value : null,
+      direction: (['UP', 'DOWN', 'NONE'].includes(x.direction)) ? x.direction : 'UP',
+      queryText: typeof x.queryText === 'string' ? x.queryText.slice(0, 300) : null,
+      multiIndex: Number.isFinite(x.multiIndex) ? x.multiIndex : null
+    }))
+    : [];
+  const pc = raw.pendingClarification;
+  mem.pendingClarification = (pc && typeof pc === 'object' && Array.isArray(pc.missing) && pc.missing.length > 0)
+    ? {
+      id: typeof pc.id === 'string' ? pc.id : 'C1',
+      missing: pc.missing.map(String),
+      originalIntent: typeof pc.originalIntent === 'string' ? pc.originalIntent : 'UNKNOWN',
+      createdAtTurn: Number.isFinite(pc.createdAtTurn) ? pc.createdAtTurn : mem.turnIndex,
+      originalText: typeof pc.originalText === 'string' ? pc.originalText.slice(0, 300) : null
+    }
+    : null;
+  mem.resolvedReferences = Array.isArray(raw.resolvedReferences) ? raw.resolvedReferences.map(String) : [];
+  const lc = raw.lastUserCorrection;
+  mem.lastUserCorrection = (lc && typeof lc === 'object' && typeof lc.to === 'string')
+    ? { from: typeof lc.from === 'string' ? lc.from : null, to: lc.to, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] }
+    : null;
+  mem.state = Object.values(WM_STATES).includes(raw.state) ? raw.state : WM_STATES.IDLE;
+  return mem;
+};
+
+/* --------------------------------------------------------------------------
+   ۳) تشخیص‌گرهای قطعی بافت (Deterministic Context Detectors)
+   -------------------------------------------------------------------------- */
+
+// سیاست حل تصحیح کاربر
+const CORRECTION_POLICY = { RESOLVE: 'RESOLVE', OVERRIDE: 'OVERRIDE', ASK_CLARIFICATION: 'ASK_CLARIFICATION', RESET: 'RESET' };
+
+const detectUserCorrection = (rawText) => {
+  const s = wmNormalize(rawText);
+  const isCorrection = /(^\s*نه\b|منظورم|اشتباه گفتم|تصحیح|ببخشید|نه اون|نه آن|نه اون یکی|اشتباه شد)/.test(s);
+  if (!isCorrection) return { isCorrection: false, targetAssets: [], intent: null };
+  const targetAssets = extractEntities(rawText).map(e => e.value);
+  // «بازیابی از حافظه» مجاز نیست؛ اگر مقصد تصحیح صریح نباشد → شفاف‌سازی
+  return {
+    isCorrection: true,
+    targetAssets,
+    intent: targetAssets.length > 0 ? CORRECTION_POLICY.OVERRIDE : CORRECTION_POLICY.ASK_CLARIFICATION
+  };
+};
+
+const detectComparisonOperation = (rawText) => {
+  const s = wmNormalize(rawText);
+  const assets = extractEntities(rawText).map(e => e.value);
+  // مرزهای واژه به‌صورت صریح (\b در جاوااسکریپت با حروف فارسی منطبق نمی‌شود)
+  if (/(^|\s)(فقط|تنها|منحصرا|صرفا)(\s|$)/.test(s)) return { operation: 'SET', assets, matched: 'فقط' };
+  if (/(حذف|بردار|پاک کن)/.test(s) || /(^|\s)(به ?جز|بدون|بغیر ?از|غیر ?از|باستثنای)(\s|$)/.test(s)) {
+    return { operation: 'REMOVE', assets, matched: 'حذف/استثنا' };
+  }
+  if (/(هم ?اضافه|اضافه ?کن|اضافه ?بشه|اضافه ?شود|را هم|هم بذار|هم بگذار|و هم)/.test(s)) return { operation: 'ADD', assets, matched: 'اضافه' };
+  if (/(جایگزین|به ?جای|عوض کن|تبدیل کن)/.test(s)) return { operation: 'REPLACE', assets, matched: 'جایگزین' };
+  return { operation: null, assets, matched: null };
+};
+
+const detectTopicReturn = (rawText) => {
+  const s = wmNormalize(rawText);
+  const isReturn = /(برگردیم به|برگرد به|بازگشت به|بازگرد به|دوباره|همون|همان|مورد قبلی|موضوع قبلی|بحث قبلی)/.test(s);
+  if (!isReturn) return { isReturn: false, target: null, explicit: false };
+  const knowledge = detectKnowledgeTopic(rawText);
+  if (knowledge) return { isReturn: true, target: { kind: 'KNOWLEDGE', value: knowledge.topic }, explicit: true };
+  const assets = extractEntities(rawText).map(e => e.value);
+  if (assets.length > 0) return { isReturn: true, target: { kind: 'ASSET', value: assets[0] }, explicit: true };
+  return { isReturn: true, target: null, explicit: false };
+};
+
+// تشخیص ارجاع به سناریو («سناریوی دوم»، «همان سناریوی قبلی»، «برعکسش»)
+const detectScenarioReference = (rawText) => {
+  const s = wmNormalize(rawText);
+  if (/(سناریو|سناوری)/.test(s)) {
+    if (/(اول|۱|1|یک)/.test(s)) return { kind: 'INDEX', index: 0 };
+    if (/(دوم|۲|2|دو)/.test(s)) return { kind: 'INDEX', index: 1 };
+    if (/(سوم|۳|3)/.test(s)) return { kind: 'INDEX', index: 2 };
+    if (/(قبلی|قبل|همان|همون|اخیر)/.test(s)) return { kind: 'PREVIOUS', index: null };
+  }
+  if (/(برعکسش|برعکس|معکوس|خلافش|جهت مخالف)/.test(s)) return { kind: 'INVERT', index: null };
+  return null;
+};
+
+// تشخیص قطعه شوک ناقص برای پیگیری سناریو («حالا ۵٪؟»، «حالا ۵٪ پایین؟»)
+const detectShockFragment = (rawText) => {
+  const s = wmNormalize(rawText);
+  if (!s) return null;
+  const followUp = /(حالا|بعدش|و اگر|اگر هم|پس اگر|بعد|دوباره|چی میشه|چی می‌شه|چطور)/.test(s);
+  const pctMatch = wmToEnDigits(s).match(/(\d+(?:\.\d+)?)\s*(?:درصد|٪|%)/);
+  const hasDirectionUp = /(بالا|رشد|افزایش|صعود|جهش|ببره بالا|بره بالا|مثبت)/.test(s);
+  const hasDirectionDown = /(پایین|ریزش|افت|کاهش|سقوط|بریزه|منفی|نزول)/.test(s);
+  if (!pctMatch) return null;
+  if (!followUp && !hasDirectionUp && !hasDirectionDown) return null;
+  return {
+    mode: 'PERCENT_CHANGE',
+    value: Number(pctMatch[1]),
+    direction: hasDirectionDown ? 'DOWN' : (hasDirectionUp ? 'UP' : null),
+    hasExplicitDirection: hasDirectionUp || hasDirectionDown
+  };
+};
+
+/* --------------------------------------------------------------------------
+   ۴) بازسازی قطعی پرسش فرضی (Deterministic Scenario Re-synthesis)
+   -------------------------------------------------------------------------- */
+const SYNTHETIC_DIRECTION = { UP: 'بالا', DOWN: 'پایین' };
+
+const buildSyntheticScenarioQuery = (asset, mode, value, direction) => {
+  const syn = wmAssetSynonym(asset);
+  if (!syn || !Number.isFinite(Number(value))) return null;
+  const v = Number(value);
+  if (mode === 'TARGET_PRICE' || mode === 'ABSOLUTE_TARGET' || direction === 'NONE') {
+    return `اگر ${syn} به ${v} برسه`;
+  }
+  if (mode === 'PERCENT_CHANGE') {
+    const dir = SYNTHETIC_DIRECTION[direction] || SYNTHETIC_DIRECTION.UP;
+    return `اگر ${syn} ${v} درصد ${dir} بره`;
+  }
+  // ABSOLUTE_CHANGE / ABSOLUTE_SHOCK
+  const dir = SYNTHETIC_DIRECTION[direction] || SYNTHETIC_DIRECTION.UP;
+  return `اگر ${syn} ${v} ${dir} بره`;
+};
+
+const resolveWhatIfParser = (deps) => {
+  if (deps && typeof deps.whatIfParser === 'function') return deps.whatIfParser;
+  if (typeof FinancialNormalizerWhatIf !== 'undefined' && FinancialNormalizerWhatIf && typeof FinancialNormalizerWhatIf.parseWhatIfQuery === 'function') {
+    return FinancialNormalizerWhatIf.parseWhatIfQuery;
+  }
+  // محیط Worker ۳: پارسر سطح‌اسکریپت (hoisted) — همان پیاده‌سازی فاز ۱-۱
+  if (typeof parseWhatIfQuery === 'function') return parseWhatIfQuery;
+  try {
+    // eslint-disable-next-line global-require
+    const mod = require('./financial-normalizer-whatif');
+    if (mod && typeof mod.parseWhatIfQuery === 'function') return mod.parseWhatIfQuery;
+  } catch (e) { /* در محیط Worker حذف می‌شود؛ parser تزریق می‌گردد */ }
+  return null;
+};
+
+const extractAssumptions = (whatIfAst) => {
+  if (!whatIfAst || typeof whatIfAst !== 'object') return [];
+  if (Array.isArray(whatIfAst.assumptions)) return whatIfAst.assumptions;
+  if (Array.isArray(whatIfAst.scenarios)) {
+    return whatIfAst.scenarios.flatMap(s => (s && Array.isArray(s.assumptions)) ? s.assumptions : []);
+  }
+  // ساختار کانونیکال مقایسه دو سناریویی فاز ۱-۱ (scenarioA / scenarioB)
+  const multi = [];
+  if (whatIfAst.scenarioA && Array.isArray(whatIfAst.scenarioA.assumptions)) multi.push(whatIfAst.scenarioA.assumptions[0]);
+  if (whatIfAst.scenarioB && Array.isArray(whatIfAst.scenarioB.assumptions)) multi.push(whatIfAst.scenarioB.assumptions[0]);
+  if (multi.length > 0) return multi.filter(Boolean);
+  return [];
+};
+
+/**
+ * ساخت بافت نوبت‌های پیشین برای موتور فاز ۱-۲ (Legacy Anaphora Bridge)
+ * فقط نوبت‌های کاربر (USER_TEXT) منتقل می‌شوند و در انتها یک نوبت مصنوعی از state معنایی
+ * فعلی افزوده می‌شود تا حل ضمیر با کمترین تقدم انجام شود. هیچ عدد بازار منتقل نمی‌شود.
+ */
+const buildRecentContextFromMemory = (memory, history) => {
+  const ctx = [];
+  if (Array.isArray(history)) {
+    for (const turn of history) {
+      if (!turn || typeof turn !== 'object') continue;
+      if (turn.role !== 'user') continue; // کانال دستیار (LLM_OUTPUT) غیرقابل اعتماد است
+      const text = String(turn.text || turn.content || '');
+      if (text) ctx.push({ role: 'user', text });
+    }
+  }
+  const syntheticParts = [];
+  for (const asset of memory.activeAssets) {
+    const syn = wmAssetSynonym(asset);
+    if (syn) syntheticParts.push(syn);
+  }
+  if (memory.activeTopic && memory.activeTopic.kind === 'KNOWLEDGE') {
+    const kws = KNOWLEDGE_TOPICS[memory.activeTopic.value];
+    if (Array.isArray(kws) && kws.length > 0) syntheticParts.push(kws[0]);
+  }
+  if (syntheticParts.length > 0) {
+    ctx.push({ role: 'system_state', text: `بافت فعال: ${syntheticParts.join(' ، ')}`, trust: WM_TRUST.SYSTEM_STATE });
+  }
+  return ctx;
+};
+
+/* --------------------------------------------------------------------------
+   ۵) حل‌کننده نوبت (Deterministic Turn Resolver) — ماشین حالت + تقدم قطعی
+   -------------------------------------------------------------------------- */
+
+const wmMarkCorrection = (val) => val;
+
+/**
+ * حل یک نوبت گفتگو روی حافظه قبلی (بدون هیچ وابستگی به LLM)
+ * @param {Object} previousMemory حافظه نوبت قبل (یا حافظه خالی)
+ * @param {string} rawText پیام کاربر
+ * @param {Object} todayEvidence شواهد تابلو (فقط به موتور نیت پاس می‌شود، هرگز به حافظه راه نمی‌یابد)
+ * @param {Object} deps وابستگی‌های تزریقی { whatIfParser, history }
+ * @returns {{ memory: Object, cir: Object, resolution: Object, validation: Object }}
+ */
+const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => {
+  const prev = normalizeWorkingMemory(previousMemory);
+  const text = String(rawText || '').trim();
+  const turnIndex = prev.turnIndex + 1;
+  const whatIfParser = resolveWhatIfParser(deps);
+  const notes = [];
+  const semanticSources = [];
+
+  const mem = Object.assign({}, prev, {
+    turnIndex,
+    updatedAtTurn: turnIndex,
+    activeAssets: prev.activeAssets.slice(),
+    topicStack: prev.topicStack.slice(),
+    comparisonSet: { mode: prev.comparisonSet.mode, assets: prev.comparisonSet.assets.slice() },
+    scenarioLedger: prev.scenarioLedger.slice(),
+    resolvedReferences: []
+  });
+
+  const registerResolved = (kind, ref) => {
+    mem.resolvedReferences.push({ kind, ref, source: WM_TRUST.DETERMINISTIC_STATE, trust: WM_TRUST_CLASS[WM_TRUST.DETERMINISTIC_STATE] });
+  };
+
+  // ── مرحله ۰: گاردریل ضدسیگنال (بدون هیچ غنی‌سازی معنایی از پرسش محدود)
+  const recentContext = buildRecentContextFromMemory(prev, deps.history);
+  const baseCir = analyzeQuery(text, recentContext, todayEvidence);
+
+  if (baseCir.intent.primary === INTENTS.ANTI_SIGNAL_RESTRICTED) {
+    const restricted = Object.assign({}, prev, { turnIndex, updatedAtTurn: turnIndex, state: WM_STATES.RESTRICTED, activeIntent: INTENTS.ANTI_SIGNAL_RESTRICTED });
+    return {
+      memory: restricted,
+      cir: baseCir,
+      resolution: {
+        path: 'ANTI_SIGNAL_GUARD',
+        state: WM_STATES.RESTRICTED,
+        semanticSources: [],
+        notes: ['پرسش محدود ضدسیگنال: هیچ دارایی/سناریو/شواهدی از این نوبت به حافظه افزوده نشد.'],
+        satisfiedBy: ['ANTI_SIGNAL_GUARD'],
+        corrected: null,
+        clarification: null,
+        staleValuesGuard: 'ENFORCED'
+      },
+      validation: validateWorkingMemory(restricted)
+    };
+  }
+
+  // ── تازگی/انقضای شفاف‌سازی معلق (Semantic Expiration)
+  let pendingExpired = false;
+  if (mem.pendingClarification && (turnIndex - mem.pendingClarification.createdAtTurn) > WM_LIMITS.PENDING_CLARIFICATION_TTL_TURNS) {
+    notes.push('شفاف‌سازی معلق منقضی شد (EXPIRED).');
+    mem.pendingClarification = null;
+    mem.state = WM_STATES.EXPIRED;
+    pendingExpired = true;
+  }
+
+  const explicitEntities = baseCir.entities.map(e => e.value);
+  const temporal = resolveTemporal(text);
+  const correction = detectUserCorrection(text);
+  const comparisonOp = detectComparisonOperation(text);
+  const topicReturn = detectTopicReturn(text);
+  const shockFragment = detectShockFragment(text);
+
+  // ── پیش‌محاسبه قطعی فرض‌های سناریویی همین نوبت (یک‌بار، برای تقدم صحیح مراحل)
+  let ast = whatIfParser ? whatIfParser(text, []) : null;
+  let assumptions = extractAssumptions(ast);
+  let replayText = null;
+  {
+    const candidateAsset = (explicitEntities.length > 0 ? explicitEntities[0] : null) ||
+      (mem.activeAssets.length > 0 ? mem.activeAssets[0] : null) ||
+      (mem.scenario ? mem.scenario.asset : null);
+    if (assumptions.length === 0 && candidateAsset) {
+      const syn = wmAssetSynonym(candidateAsset);
+      if (syn) {
+        replayText = `${text} ${syn}`;
+        const replayAst = whatIfParser ? whatIfParser(replayText, []) : null;
+        const replayAssumptions = extractAssumptions(replayAst);
+        if (replayAssumptions.length > 0) {
+          assumptions = replayAssumptions;
+          ast = replayAst;
+          notes.push('فرض شوک با ضمیمه دارایی بافت‌دار بازخوانی شد (Deterministic Asset-Append Replay).');
+        }
+      }
+    }
+  }
+  const isSelfContainedMulti = !!(ast && ast.type === 'MULTI_SCENARIO_COMPARISON' && assumptions.length >= 2);
+  const scenarioRef = isSelfContainedMulti ? null : detectScenarioReference(text);
+
+  let resolutionPath = 'NO_CONTEXT';
+  let corrected = null;
+  let clarification = null;
+  let reAskedClarification = null;
+  let resolvedCir = baseCir;
+
+  const setComparison = (assets, mode) => {
+    mem.comparisonSet = { mode, assets: assets.slice() };
+    mem.activeAssets = assets.slice();
+  };
+
+  const registerScenario = (entry) => {
+    const s = Object.assign({}, entry);
+    mem.scenario = s;
+    mem.scenarioLedger = mem.scenarioLedger.concat([s]).slice(-WM_LIMITS.MAX_SCENARIO_LEDGER);
+    return s;
+  };
+
+  const nextScenarioId = () => `S${mem.scenarioLedger.length + 1}`;
+
+  // ── مرحله ۱: تصحیح صریح کاربر (بالاترین اولویت معنایی)
+  if (correction.isCorrection) {
+    if (correction.intent === CORRECTION_POLICY.OVERRIDE) {
+      const from = mem.activeAssets.length === 1 ? mem.activeAssets[0] : null;
+      const to = correction.targetAssets[0];
+      corrected = { from, to, policy: CORRECTION_POLICY.OVERRIDE };
+      mem.lastUserCorrection = { from, to, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+      mem.activeAssets = correction.targetAssets.slice();
+      setComparison(correction.targetAssets.slice(), 'SINGLE');
+      mem.activeTopic = { kind: 'ASSET', value: to, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+      registerResolved('ASSET_OVERRIDE', to);
+      mem.state = WM_STATES.ASSET_CONTEXT;
+      resolutionPath = 'USER_CORRECTION_OVERRIDE';
+      semanticSources.push(WM_TRUST.USER_TEXT);
+      // حل مجدد پرسش با دارایی تصحیح‌شده (بدون حدس)
+      const syn = wmAssetSynonym(to);
+      resolvedCir = syn ? analyzeQuery(text.includes(syn) ? text : `${text} ${syn}`, recentContext, todayEvidence) : baseCir;
+    } else {
+      mem.state = WM_STATES.AWAITING_CLARIFICATION;
+      clarification = { id: `C${turnIndex}`, missing: ['ASSET'], originalIntent: baseCir.intent.primary, createdAtTurn: turnIndex, originalText: text.slice(0, 300) };
+      mem.pendingClarification = clarification;
+      resolutionPath = 'USER_CORRECTION_CLARIFICATION';
+      notes.push('تصحیح کاربر بدون مقصد صریح: شفاف‌سازی لازم است (بدون حدس).');
+    }
+  }
+
+  // ── مرحله ۲: مصرف شفاف‌سازی معلق (Pending Clarification Consumption)
+  if (!correction.isCorrection && mem.pendingClarification && !pendingExpired) {
+    const pc = mem.pendingClarification;
+    const isBareAssetAnswer = explicitEntities.length > 0 && !baseCir.requiresKnowledge &&
+      (baseCir.intent.primary === INTENTS.UNKNOWN || baseCir.intent.primary === INTENTS.MARKET_STATUS || baseCir.intent.primary === INTENTS.ASSET_ANALYSIS) &&
+      (comparisonOp.operation === null) && !topicReturn.isReturn && !scenarioRef;
+
+    if (isBareAssetAnswer && pc.missing.includes('ASSET') && pc.originalText) {
+      const replayText = `${pc.originalText} ${text}`.trim();
+      const replayCir = analyzeQuery(replayText, recentContext, todayEvidence);
+      const assumptions = extractAssumptions(whatIfParser ? whatIfParser(replayText, []) : null);
+      if (replayCir.intent.primary === INTENTS.WHAT_IF && replayCir.entities.length > 0 && assumptions.length > 0) {
+        const a = assumptions[0];
+        registerScenario({
+          scenarioId: nextScenarioId(),
+          parentScenarioId: null,
+          asset: a.asset,
+          mode: a.mode,
+          value: a.value,
+          direction: a.direction,
+          queryText: replayText.slice(0, 300),
+          multiIndex: null
+        });
+        mem.activeAssets = [a.asset];
+        focusAsset(a.asset, mem);
+        mem.activeTopic = { kind: 'ASSET', value: a.asset, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+        mem.pendingClarification = null;
+        mem.state = WM_STATES.SCENARIO_CONTEXT;
+        resolvedCir = replayCir;
+        resolutionPath = 'PENDING_CLARIFICATION_RESOLVED';
+        registerResolved('PENDING_CLARIFICATION', pc.id);
+        semanticSources.push(WM_TRUST.USER_TEXT, WM_TRUST.SYSTEM_STATE);
+      }
+    }
+    if (resolutionPath === 'NO_CONTEXT') {
+      // پاسخ، شفاف‌سازی معلق را پاسخ نداد → معلق تا سقف TTL حفظ و در نوبت بعد مجدداً پرسیده می‌شود
+      // (قرارداد §9: «bare asset answer resolves it; otherwise re-ask»)
+      reAskedClarification = {
+        id: pc.id,
+        missing: pc.missing.slice(),
+        originalIntent: pc.originalIntent,
+        createdAtTurn: pc.createdAtTurn,
+        reAsk: true
+      };
+      notes.push('شفاف‌سازی معلق پاسخ داده نشد؛ تا سقف TTL حفظ و مجدداً پرسیده می‌شود (Re-Ask).');
+    }
+  }
+
+  // ── مرحله ۳: ارجاع به سناریو (پیگیری/بازگشت/وارونگی)
+  if (resolutionPath === 'NO_CONTEXT' && scenarioRef) {
+    const pickEntry = () => {
+      if (scenarioRef.kind === 'INVERT' || scenarioRef.kind === 'PREVIOUS') {
+        return mem.scenario || mem.scenarioLedger[mem.scenarioLedger.length - 1] || null;
+      }
+      if (scenarioRef.kind === 'INDEX') {
+        const ledger = mem.scenarioLedger;
+        return (ledger.length > scenarioRef.index) ? ledger[scenarioRef.index] : null;
+      }
+      return null;
+    };
+    const target = pickEntry();
+    if (target) {
+      const direction = (scenarioRef.kind === 'INVERT')
+        ? (target.direction === 'UP' ? 'DOWN' : 'UP')
+        : target.direction;
+      const q = (scenarioRef.kind === 'INVERT')
+        ? buildSyntheticScenarioQuery(target.asset, target.mode, target.value, direction)
+        : (target.queryText || buildSyntheticScenarioQuery(target.asset, target.mode, target.value, direction));
+      const replayCir = q ? analyzeQuery(q, recentContext, todayEvidence) : baseCir;
+      const ast = whatIfParser ? whatIfParser(q || '', []) : null;
+      const assumptions = extractAssumptions(ast);
+      const a = assumptions[target.multiIndex != null ? Math.min(target.multiIndex, assumptions.length - 1) : 0] || assumptions[0];
+      if (a) {
+        registerScenario({
+          scenarioId: nextScenarioId(),
+          parentScenarioId: target.scenarioId || null,
+          asset: a.asset,
+          mode: a.mode,
+          value: a.value,
+          direction: a.direction,
+          queryText: (q || '').slice(0, 300),
+          multiIndex: null
+        });
+        mem.activeAssets = [a.asset];
+        focusAsset(a.asset, mem);
+        mem.state = WM_STATES.SCENARIO_CONTEXT;
+        resolvedCir = replayCir;
+        resolutionPath = scenarioRef.kind === 'INVERT' ? 'SCENARIO_INVERTED' : 'SCENARIO_REFERENCE_RESOLVED';
+        registerResolved('SCENARIO', target.scenarioId || 'S1');
+        semanticSources.push(WM_TRUST.USER_TEXT, WM_TRUST.SYSTEM_STATE);
+      }
+    }
+    if (resolutionPath === 'NO_CONTEXT') {
+      mem.state = WM_STATES.AWAITING_CLARIFICATION;
+      clarification = { id: `C${turnIndex}`, missing: ['SCENARIO'], originalIntent: INTENTS.WHAT_IF, createdAtTurn: turnIndex, originalText: text.slice(0, 300) };
+      mem.pendingClarification = clarification;
+      resolutionPath = 'SCENARIO_REFERENCE_UNRESOLVED';
+      notes.push('ارجاع سناریویی بدون سناریوی معتبر قابل حل نیست → شفاف‌سازی.');
+    }
+  }
+
+  // ── مرحله ۴: عملیات روی مجموعه مقایسه (ADD / REMOVE / REPLACE / SET)
+  // گارد: عملیات مجموعه تنها در بافت مقایسه/دارایی فعال و بیرون از پرسش دانشنامه‌ای اعمال می‌شود
+  const comparisonContextAssets = (mem.comparisonSet.assets.length > 0) ? mem.comparisonSet.assets.slice() : mem.activeAssets.slice();
+  const comparisonStageApplicable = comparisonOp.operation &&
+    !baseCir.requiresKnowledge &&
+    baseCir.intent.primary !== INTENTS.KNOWLEDGE_QUERY &&
+    (comparisonOp.assets.length > 0 || comparisonContextAssets.length >= 2);
+  if (resolutionPath === 'NO_CONTEXT' && comparisonStageApplicable) {
+    const op = comparisonOp.operation;
+    const assets = comparisonOp.assets;
+    if (assets.length === 0 && op !== 'SET') {
+      mem.state = WM_STATES.AWAITING_CLARIFICATION;
+      clarification = { id: `C${turnIndex}`, missing: ['ASSET'], originalIntent: INTENTS.COMPARISON, createdAtTurn: turnIndex, originalText: text.slice(0, 300) };
+      mem.pendingClarification = clarification;
+      resolutionPath = 'COMPARISON_OPERATION_UNRESOLVED';
+      notes.push('عملیات مجموعه مقایسه بدون دارایی صریح: شفاف‌سازی (مجموعه حدس زده نشد).');
+    } else {
+      const current = mem.comparisonSet.assets.length > 0 ? mem.comparisonSet.assets : mem.activeAssets.slice();
+      let next = current.slice();
+      if (op === 'ADD') {
+        for (const a of assets) if (!next.includes(a)) next.push(a);
+      } else if (op === 'REMOVE') {
+        next = next.filter(a => !assets.includes(a));
+      } else if (op === 'REPLACE' || op === 'SET') {
+        next = assets.slice();
+      }
+      if (next.length === 0) {
+        mem.state = WM_STATES.AWAITING_CLARIFICATION;
+        clarification = { id: `C${turnIndex}`, missing: ['ASSET'], originalIntent: INTENTS.COMPARISON, createdAtTurn: turnIndex, originalText: text.slice(0, 300) };
+        mem.pendingClarification = clarification;
+        resolutionPath = 'COMPARISON_EMPTY_SET';
+        notes.push('مجموعه مقایسه بعد از عملیات خالی می‌شود → شفاف‌سازی.');
+      } else {
+        setComparison(next, next.length >= 2 ? 'COMPARE' : 'SINGLE');
+        mem.state = next.length >= 2 ? WM_STATES.COMPARISON_CONTEXT : WM_STATES.ASSET_CONTEXT;
+        resolutionPath = `COMPARISON_${op}`;
+        registerResolved('COMPARISON_SET', next.join('+'));
+        semanticSources.push(WM_TRUST.SYSTEM_STATE);
+      }
+    }
+  }
+
+  // ── مرحله ۵: بازگشت به موضوع (Topic Return)
+  if (resolutionPath === 'NO_CONTEXT' && topicReturn.isReturn) {
+    if (topicReturn.explicit) {
+      if (mem.activeTopic) mem.topicStack = mem.topicStack.concat([{ kind: mem.activeTopic.kind, value: mem.activeTopic.value }]).slice(-WM_LIMITS.MAX_TOPIC_STACK_DEPTH);
+      mem.activeTopic = { kind: topicReturn.target.kind, value: topicReturn.target.value, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+      if (topicReturn.target.kind === 'ASSET') {
+        mem.activeAssets = [topicReturn.target.value];
+        focusAsset(topicReturn.target.value, mem);
+        mem.state = WM_STATES.ASSET_CONTEXT;
+      } else {
+        mem.activeAssets = [];
+        setComparison([], 'SINGLE');
+        mem.state = WM_STATES.TOPIC_CONTEXT;
+      }
+      if (mem.scenario && topicReturn.target.kind === 'ASSET' && mem.scenario.asset !== topicReturn.target.value) {
+        mem.scenario = null;
+      }
+      if (mem.scenario && topicReturn.target.kind === 'KNOWLEDGE') {
+        mem.scenario = null;
+      }
+      resolutionPath = 'TOPIC_RETURN_EXPLICIT';
+      registerResolved('TOPIC', `${topicReturn.target.kind}:${topicReturn.target.value}`);
+      semanticSources.push(WM_TRUST.USER_TEXT);
+    } else if (mem.topicStack.length > 0) {
+      const target = mem.topicStack[mem.topicStack.length - 1];
+      mem.topicStack = mem.topicStack.slice(0, -1);
+      mem.activeTopic = { kind: target.kind, value: target.value, source: WM_TRUST.SYSTEM_STATE, trust: WM_TRUST_CLASS[WM_TRUST.SYSTEM_STATE] };
+      if (target.kind === 'ASSET') {
+        mem.activeAssets = [target.value];
+        setComparison([target.value], 'SINGLE');
+        mem.state = WM_STATES.ASSET_CONTEXT;
+      } else {
+        mem.state = WM_STATES.TOPIC_CONTEXT;
+      }
+      resolutionPath = 'TOPIC_RETURN_STACK';
+      registerResolved('TOPIC', `${target.kind}:${target.value}`);
+      semanticSources.push(WM_TRUST.SYSTEM_STATE);
+    } else {
+      mem.state = WM_STATES.AWAITING_CLARIFICATION;
+      clarification = { id: `C${turnIndex}`, missing: ['TOPIC'], originalIntent: INTENTS.FOLLOW_UP, createdAtTurn: turnIndex, originalText: text.slice(0, 300) };
+      mem.pendingClarification = clarification;
+      resolutionPath = 'TOPIC_RETURN_UNRESOLVED';
+      notes.push('بازگشت به موضوع بدون مقصد صریح و بدون پشته معتبر → شفاف‌سازی.');
+    }
+  }
+
+  // ── مرحله ۶: سناریو (صریح / پیگیری / وارونگی جهت / جانشینی دارایی)
+  if (resolutionPath === 'NO_CONTEXT') {
+    const isMulti = isSelfContainedMulti;
+    const activeScenario = mem.scenario;
+    const isScenarioIntent = baseCir.intent.primary === INTENTS.WHAT_IF ||
+      baseCir.intent.primary === INTENTS.SCENARIO_COMPARISON ||
+      !!ast || !!shockFragment ||
+      (baseCir.intent.primary === INTENTS.CLARIFICATION_REQUIRED && (baseCir.intent.secondary || []).includes(INTENTS.WHAT_IF));
+
+    if (isScenarioIntent) {
+      if (isMulti) {
+        // دفتر سناریو: ثبت همه فروض نوبت در Ledger با ایندکس (پشتیبانی «سناریوی دوم»)
+        let parentId = activeScenario ? activeScenario.scenarioId : null;
+        assumptions.forEach((a, idx) => {
+          const entry = {
+            scenarioId: `S${mem.scenarioLedger.length + 1}`,
+            parentScenarioId: parentId,
+            asset: a.asset,
+            mode: a.mode,
+            value: a.value,
+            direction: a.direction,
+            queryText: text.slice(0, 300),
+            multiIndex: idx
+          };
+          registerScenario(entry);
+          parentId = entry.scenarioId;
+        });
+        const assets = Array.from(new Set(assumptions.map(a => a.asset)));
+        setComparison(assets, assets.length >= 2 ? 'COMPARE' : 'SINGLE');
+        mem.activeAssets = assets;
+        mem.state = WM_STATES.SCENARIO_CONTEXT;
+        resolutionPath = 'SCENARIO_MULTI_REGISTERED';
+        semanticSources.push(WM_TRUST.USER_TEXT);
+      } else {
+        let asset = null;
+        let mode = null;
+        let value = null;
+        let direction = null;
+        let queryText = text.slice(0, 300);
+
+        if (assumptions.length > 0) {
+          const a = assumptions[0];
+          asset = a.asset; mode = a.mode; value = a.value; direction = a.direction;
+          if (replayText) queryText = replayText.slice(0, 300);
+        } else if (shockFragment) {
+          // پیگیری سناریو: دارایی از فرض فعال یا دارایی‌های فعال؛ جهت از قطعه یا ارث‌بری
+          asset = (activeScenario && activeScenario.asset) || mem.activeAssets[0] || null;
+          mode = shockFragment.mode;
+          value = shockFragment.value;
+          direction = shockFragment.hasExplicitDirection
+            ? shockFragment.direction
+            : ((activeScenario && activeScenario.direction) || 'UP');
+          const synth = asset ? buildSyntheticScenarioQuery(asset, mode, value, direction) : null;
+          if (synth) {
+            queryText = synth.slice(0, 300);
+            const synthCir = analyzeQuery(synth, recentContext, todayEvidence);
+            const synthAst = whatIfParser ? whatIfParser(synth, []) : null;
+            const synthAssumptions = extractAssumptions(synthAst);
+            if (synthAssumptions.length > 0) {
+              const sa = synthAssumptions[0];
+              asset = sa.asset; mode = sa.mode; value = sa.value; direction = sa.direction;
+            }
+            resolvedCir = synthCir;
+          }
+        }
+
+        // عدم جانشینی/حدس: اگر دارایی قابل تعیین نیست → شفاف‌سازی
+        if (!asset || !Number.isFinite(Number(value))) {
+          mem.state = WM_STATES.AWAITING_CLARIFICATION;
+          clarification = {
+            id: `C${turnIndex}`,
+            missing: ['ASSET'],
+            originalIntent: INTENTS.WHAT_IF,
+            createdAtTurn: turnIndex,
+            originalText: text.slice(0, 300)
+          };
+          mem.pendingClarification = clarification;
+          resolutionPath = 'SCENARIO_UNRESOLVED';
+          notes.push('فرض سناریویی بدون دارایی قابل اعتماد: شفاف‌سازی (بدون حدس).');
+        } else {
+          const parent = activeScenario;
+          const sameAsParent = parent && parent.asset === asset && Number(parent.value) === Number(value) && parent.direction === direction && parent.mode === mode;
+          const entry = {
+            scenarioId: nextScenarioId(),
+            parentScenarioId: parent ? parent.scenarioId : null,
+            asset,
+            mode: mode || 'PERCENT_CHANGE',
+            value: Number(value),
+            direction: direction || 'UP',
+            queryText,
+            multiIndex: null
+          };
+          if (!sameAsParent) {
+            registerScenario(entry);
+            semanticSources.push(WM_TRUST.USER_TEXT);
+          } else if (!mem.scenario) {
+            registerScenario(entry);
+          }
+          mem.activeAssets = [asset];
+          focusAsset(asset, mem);
+          mem.activeTopic = { kind: 'ASSET', value: asset, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+          mem.state = WM_STATES.SCENARIO_CONTEXT;
+          if (resolutionPath === 'NO_CONTEXT') {
+            if (shockFragment && parent) {
+              resolutionPath = shockFragment.hasExplicitDirection ? 'SCENARIO_DIRECTION_OVERRIDE' : 'SCENARIO_CARRY_OVER';
+            } else {
+              resolutionPath = 'SCENARIO_EXPLICIT';
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── مرحله ۷: پرسش دانشنامه‌ای → پشته موضوع
+  if (resolutionPath === 'NO_CONTEXT' && (baseCir.requiresKnowledge || baseCir.knowledgeQuery)) {
+    const topic = baseCir.knowledgeQuery ? baseCir.knowledgeQuery.topic : null;
+    if (mem.activeTopic) mem.topicStack = mem.topicStack.concat([{ kind: mem.activeTopic.kind, value: mem.activeTopic.value }]).slice(-WM_LIMITS.MAX_TOPIC_STACK_DEPTH);
+    mem.activeTopic = topic ? { kind: 'KNOWLEDGE', value: topic, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] } : mem.activeTopic;
+    mem.activeAssets = [];
+    setComparison([], 'SINGLE');
+    // سناریوی فعال با تغییر موضوع صریح منقضی می‌شود (سابقه در Ledger حفظ می‌ماند)
+    if (mem.scenario) { mem.scenario = null; notes.push('سناریوی فعال با تغییر موضوع صریح غیرفعال شد (سابقه در Ledger).'); }
+    mem.state = WM_STATES.TOPIC_CONTEXT;
+    resolutionPath = 'KNOWLEDGE_TOPIC';
+    semanticSources.push(WM_TRUST.USER_TEXT);
+  }
+
+  // ── مرحله ۸: دارایی صریح / مقایسه صریح / حل ضمیر فاز ۱-۲
+  if (resolutionPath === 'NO_CONTEXT') {
+    if (explicitEntities.length >= 2 || (baseCir.intent.primary === INTENTS.COMPARISON && explicitEntities.length >= 1)) {
+      setComparison(explicitEntities.slice(), explicitEntities.length >= 2 ? 'COMPARE' : 'SINGLE');
+      mem.state = explicitEntities.length >= 2 ? WM_STATES.COMPARISON_CONTEXT : WM_STATES.ASSET_CONTEXT;
+      mem.activeTopic = { kind: 'ASSET', value: explicitEntities[0], source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+      if (mem.scenario && !explicitEntities.includes(mem.scenario.asset)) {
+        mem.scenario = null;
+        notes.push('سناریوی فعال خارج از مجموعه صریح جدید بود و غیرفعال شد (سابقه در Ledger).');
+      }
+      resolutionPath = (baseCir.context && baseCir.context.isFollowUp) ? 'LEGACY_ANAPHORA' : 'EXPLICIT_COMPARISON';
+      semanticSources.push((baseCir.context && baseCir.context.isFollowUp) ? WM_TRUST.SYSTEM_STATE : WM_TRUST.USER_TEXT);
+    } else if (explicitEntities.length === 1) {
+      mem.activeAssets = explicitEntities.slice();
+      setComparison(explicitEntities.slice(), 'SINGLE');
+      mem.activeTopic = { kind: 'ASSET', value: explicitEntities[0], source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
+      // جانشینی صریح دارایی: سناریوی متعلق به دارایی دیگر نباید فعال باقی بماند
+      if (mem.scenario && mem.scenario.asset !== explicitEntities[0]) {
+        mem.scenario = null;
+        notes.push('سناریوی فعال متعلق به دارایی دیگر بود و غیرفعال شد (سابقه در Ledger).');
+      }
+      mem.state = WM_STATES.ASSET_CONTEXT;
+      resolutionPath = (baseCir.context && baseCir.context.isFollowUp) ? 'LEGACY_ANAPHORA' : 'EXPLICIT_ASSET';
+      semanticSources.push((baseCir.context && baseCir.context.isFollowUp) ? WM_TRUST.SYSTEM_STATE : WM_TRUST.USER_TEXT);
+      if (baseCir.context && baseCir.context.isFollowUp) registerResolved('ASSET', explicitEntities.join('+'));
+    } else if (baseCir.context && baseCir.context.isFollowUp && baseCir.entities.length > 0) {
+      const assets = baseCir.entities.map(e => e.value);
+      mem.activeAssets = assets.slice();
+      setComparison(assets.slice(), 'SINGLE');
+      mem.state = WM_STATES.ASSET_CONTEXT;
+      resolutionPath = 'LEGACY_ANAPHORA';
+      registerResolved('ASSET', assets.join('+'));
+      semanticSources.push(WM_TRUST.SYSTEM_STATE);
+    }
+  }
+
+  // ── مرحله ۹: پیگیری مبهم (Pronoun follow-up بدون دارایی) → استفاده از دارایی فعال یا شفاف‌سازی
+  if (resolutionPath === 'NO_CONTEXT') {
+    const isVagueFollowUp = /(اون|آن|همین|ایشون|این یکی|مورد|چطوره|چیه)/.test(wmNormalize(text)) && text.length <= 30;
+    if (isVagueFollowUp && mem.activeAssets.length > 0) {
+      mem.activeAssets = mem.activeAssets.slice();
+      mem.state = mem.state === WM_STATES.SCENARIO_CONTEXT ? WM_STATES.SCENARIO_CONTEXT : WM_STATES.ASSET_CONTEXT;
+      resolutionPath = 'VAGUE_FOLLOWUP_ACTIVE_ASSET';
+      registerResolved('ASSET', mem.activeAssets.join('+'));
+      semanticSources.push(WM_TRUST.SYSTEM_STATE);
+    } else if (temporal.label) {
+      resolutionPath = 'TEMPORAL_FOLLOWUP';
+      if (mem.timeframe.horizon === 'CURRENT') mem.timeframe = { label: temporal.label, horizon: temporal.horizon, requiresHistoricalData: temporal.requiresHistoricalData, requiresForecastCapability: temporal.requiresForecastCapability };
+      semanticSources.push(WM_TRUST.USER_TEXT);
+    } else {
+      // گذار EXPIRED → IDLE: حافظهٔ منقضی با نوبت بی‌بافت به IDLE بازنشانی می‌شود
+      mem.state = (prev.state === WM_STATES.IDLE || prev.state === WM_STATES.EXPIRED || pendingExpired) ? WM_STATES.IDLE : mem.state;
+      resolutionPath = 'NO_CONTEXT';
+    }
+  }
+
+  // ── افق زمانی (Temporal) → ثبت در حافظه و انتقال به CIR
+  if (temporal.label) {
+    mem.timeframe = {
+      label: temporal.label,
+      horizon: temporal.horizon,
+      requiresHistoricalData: temporal.requiresHistoricalData,
+      requiresForecastCapability: temporal.requiresForecastCapability
+    };
+    semanticSources.push(WM_TRUST.USER_TEXT);
+  }
+
+  // ── انتشار بافت حل‌شده در CIR (بدون تغییر منطق فاز ۱-۲)
+  if (resolvedCir && typeof resolvedCir === 'object') {
+    resolvedCir = Object.assign({}, resolvedCir, {
+      context: Object.assign({}, resolvedCir.context, {
+        isFollowUp: resolutionPath === 'LEGACY_ANAPHORA' || resolutionPath === 'VAGUE_FOLLOWUP_ACTIVE_ASSET' || resolutionPath === 'SCENARIO_CARRY_OVER' || resolutionPath === 'SCENARIO_DIRECTION_OVERRIDE',
+        resolvedFromContext: mem.resolvedReferences.map(r => r.ref),
+        resolutionPath,
+        state: mem.state,
+        timeframe: mem.timeframe,
+        scenario: mem.scenario ? { scenarioId: mem.scenario.scenarioId, parentScenarioId: mem.scenario.parentScenarioId, asset: mem.scenario.asset, mode: mem.scenario.mode, value: mem.scenario.value, direction: mem.scenario.direction } : null,
+        comparisonSet: { mode: mem.comparisonSet.mode, assets: mem.comparisonSet.assets.slice() },
+        pendingClarification: mem.pendingClarification ? { id: mem.pendingClarification.id, missing: mem.pendingClarification.missing.slice() } : null
+      }),
+      activeIntent: mem.activeIntent || (resolvedCir.intent && resolvedCir.intent.primary)
+    });
+  }
+
+  // تثبیت نیت/دارایی فعال در حافظه
+  if (resolvedCir && resolvedCir.intent) {
+    mem.activeIntent = resolvedCir.intent.primary;
+  }
+
+  const validation = validateWorkingMemory(mem);
+
+  return {
+    memory: mem,
+    cir: resolvedCir,
+    resolution: {
+      path: resolutionPath,
+      state: mem.state,
+      semanticSources: Array.from(new Set(semanticSources)),
+      notes,
+      satisfiedBy: [
+        correction.isCorrection ? 'EXPLICIT_USER_CORRECTION' : null,
+        temporal.label ? `TEMPORAL:${temporal.label}` : null,
+        comparisonOp.operation ? `COMPARISON_OP:${comparisonOp.operation}` : null,
+        scenarioRef ? `SCENARIO_REF:${scenarioRef.kind}` : null,
+        topicReturn.isReturn ? 'TOPIC_RETURN' : null,
+        explicitEntities.length > 0 ? 'EXPLICIT_ENTITIES' : null,
+        (baseCir.context && baseCir.context.isFollowUp) ? 'PHASE_1_2_ANAPHORA' : null
+      ].filter(Boolean),
+      corrected,
+      clarification: clarification || reAskedClarification,
+      clarificationResolved: resolutionPath === 'PENDING_CLARIFICATION_RESOLVED',
+      staleValuesGuard: validation.clean ? 'ENFORCED' : 'VIOLATION',
+      validationViolations: validation.violations
+    },
+    validation
+  };
+};
+
+/** اجرای چند نوبت پیاپی روی یک متن (ابزار آزمون و شبیه‌سازی) */
+const resolveTurnSequence = (turns, options = {}) => {
+  let memory = options.initialMemory ? normalizeWorkingMemory(options.initialMemory) : createWorkingMemory();
+  const results = [];
+  const history = [];
+  for (const turn of turns) {
+    const res = resolveTurn(memory, turn, options.todayEvidence || {}, Object.assign({}, options.deps, { history: history.slice() }));
+    results.push(res);
+    history.push({ role: 'user', text: turn });
+    history.push({ role: 'assistant', text: options.assistantText || '' });
+    memory = res.memory;
+  }
+  return { memory, results };
+};
+
+/** لاگ ساختاریافته حافظه (بدون هیچ مقدار بازاری) */
+const formatMemoryLog = (memory) => {
+  const mem = normalizeWorkingMemory(memory);
+  return {
+    contractVersion: mem.contractVersion,
+    turnIndex: mem.turnIndex,
+    state: mem.state,
+    activeIntent: mem.activeIntent,
+    activeAssets: mem.activeAssets.slice(),
+    activeTopic: mem.activeTopic ? `${mem.activeTopic.kind}:${mem.activeTopic.value}` : null,
+    topicStackDepth: mem.topicStack.length,
+    comparisonSet: { mode: mem.comparisonSet.mode, assets: mem.comparisonSet.assets.slice() },
+    timeframe: mem.timeframe,
+    scenario: mem.scenario ? `${mem.scenario.scenarioId}:${mem.scenario.asset}:${mem.scenario.direction}:${mem.scenario.value}${mem.scenario.mode === 'PERCENT_CHANGE' ? '%' : ''}` : null,
+    pendingClarification: mem.pendingClarification ? mem.pendingClarification.id : null,
+    lastUserCorrection: mem.lastUserCorrection ? `${mem.lastUserCorrection.from}→${mem.lastUserCorrection.to}` : null,
+    staleValuesGuard: validateWorkingMemory(mem).clean ? 'ENFORCED' : 'VIOLATION'
+  };
+};
 
 function formatStructuredLog(interpretation, retrievedKnowledge = null) {
   const log = {
