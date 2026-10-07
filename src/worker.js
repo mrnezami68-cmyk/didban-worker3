@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3D (Canonical Identity Profile — MAKAN)';
+const WORKER_PHASE = 'Phase 2-3E-B (Multi-Asset Scenario Binding & Intent Gate Fix)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -140,6 +140,7 @@ export default {
         knowledgeRetriever: 'ENABLED (Phase 2-1 Deterministic Core)',
         evidenceBuilder: 'ENABLED (Phase 2-2 Unified Evidence Contract v1.0)',
         workingMemory: 'ENABLED (Phase 2-3B Semantic Working Memory v1.0 — client-carried, stateless worker)',
+        scenarioBinding: 'ENABLED (Phase 2-3E-B Multi-Asset Scenario Binding & Intent Gate v1.0)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
@@ -444,7 +445,23 @@ export default {
           let whatIfAst = parseWhatIfQuery(userMsg, history);
           // Phase 2-3C: پیگیری سناریویی بدون دارایی/جهت صریح — بازسازی پرسش مؤثر از سناریوی حل‌شده حافظه کاری
           if (!whatIfAst) {
-            const scResolved = (queryAnalysis.context && queryAnalysis.context.scenario) ? queryAnalysis.context.scenario : null;
+            // FIX-4 (Phase 2-3E-B): پیام دارای بیش از یک شوک درصدی مستقل، هرگز به سناریوی تک‌دارایی قبلی تقلیل نمی‌یابد
+            const multiShockInMessage = (String(userMsg).match(/[0-9۰-۹]+(?:[.,][0-9۰-۹]+)?\s*(?:درصد|٪|%)/g) || []).length >= 2;
+            // FIX-5 (Phase 2-3E-B): پیگیری هدف سناریوی فعال — بازسازی پرسش مؤثر از زنجیره کامل فرض‌های ثبت‌شده (بدون حذف فرض)
+            const scChain = (!multiShockInMessage && queryAnalysis.context && Array.isArray(queryAnalysis.context.scenarioChain))
+              ? queryAnalysis.context.scenarioChain.filter(a => a && a.asset && Object.prototype.hasOwnProperty.call(a, 'value') && Number.isFinite(Number(a.value)))
+              : [];
+            if (scChain.length >= 2) {
+              const chainParts = scChain.map((a, i) => {
+                const ent = Array.isArray(queryAnalysis.entities) ? queryAnalysis.entities.find(e => e && e.value === a.asset) : null;
+                const faLabel = (ent && ent.raw) ? ent.raw : ResponsePresentation.assetLabel(a.asset);
+                const dirFa = a.direction === 'DOWN' ? 'پایین' : 'بالا';
+                return (i === 0 ? 'اگر ' : '') + faLabel + ' ' + ResponsePresentation.toFaDigits(String(a.value)) + '٪ ' + dirFa + ' بره';
+              });
+              const mergedAst = parseWhatIfQuery(chainParts.join(' و '), history);
+              if (mergedAst && Array.isArray(mergedAst.assumptions) && mergedAst.assumptions.length >= 2) whatIfAst = mergedAst;
+            }
+            const scResolved = (!whatIfAst && !multiShockInMessage && queryAnalysis.context && queryAnalysis.context.scenario) ? queryAnalysis.context.scenario : null;
             if (scResolved && scResolved.asset && scResolved.mode === 'PERCENT_CHANGE' &&
                 scResolved.value !== null && scResolved.value !== undefined && Number.isFinite(Number(scResolved.value))) {
               const entResolved = Array.isArray(queryAnalysis.entities) ? queryAnalysis.entities.find(e => e && e.value === scResolved.asset) : null;
@@ -779,7 +796,7 @@ function analyzeQuery(rawText, recentContext = [], todayEvidence = {}) {
   }
 
   // ۳. بررسی سناریوی فرضی و What-If
-  const isHypothetical = (/(اگر|فرض\s*کن|چنانچه|در\s*صورتی\s*که|احتمال|برسه\s*به|بشه|بشود|سناریو)/i.test(text) ||
+  const isHypothetical = (/(اگر|فرض\s*کن|چنانچه|در\s*صورتی\s*که|احتمال|برسه\s*به|بشه|بشود|سناریو|رشد[\s\u200c]*(?:کند|کنه|کنند|می[\s\u200c]*کند|نماید|یابد|داشته[\s\u200c]*(?:باشد|باشه)|بگیرد|بگیره)|بالا[\s\u200c]*(?:برود|بره|می[\s\u200c]*رود|میره|بیاید|بیاد|بکشد)|پایین[\s\u200c]*(?:برود|بره|می[\s\u200c]*رود|میره|بیاید|بیاد|بکشد)|مثبت[\s\u200c]*(?:شود|بشه|می[\s\u200c]*شود|میشه)|منفی[\s\u200c]*(?:شود|بشه|می[\s\u200c]*شود|میشه)|افزایش[\s\u200c]*(?:یابد|پیدا[\s\u200c]*(?:کند|کنه))|کاهش[\s\u200c]*(?:یابد|پیدا[\s\u200c]*(?:کند|کنه))|افت[\s\u200c]*(?:کند|کنه|نماید|داشته[\s\u200c]*(?:باشد|باشه))|ریزش[\s\u200c]*(?:کند|کنه|نماید|داشته[\s\u200c]*(?:باشد|باشه))|کم[\s\u200c]*(?:شود|بشه)|کمتر[\s\u200c]*(?:شود|بشه)|نزول[\s\u200c]*(?:کند|کنه)|سقوط[\s\u200c]*(?:کند|کنه)|صعود[\s\u200c]*(?:کند|کنه)|جهش[\s\u200c]*(?:کند|کنه)|تقویت[\s\u200c]*(?:شود|بشه)|تضعیف[\s\u200c]*(?:شود|بشه)|گران[\s\u200c]*(?:شود|تر[\s\u200c]*(?:شود|بشه))|ارزان[\s\u200c]*(?:شود|تر[\s\u200c]*(?:شود|بشه))|بیشتر[\s\u200c]*(?:شود|بشه)|پامپ[\s\u200c]*(?:کند|بشه|شود)|دامپ[\s\u200c]*(?:کند|بشه|شود)|[+\-\u2212][\s\u200c]*[0-9\u06F0-\u06F9\u0660-\u0669]+(?:\.[0-9\u06F0-\u06F9\u0660-\u0669]+)?[\s\u200c]*(?:درصد|٪|%))/i.test(text) ||
     (/(ساید|رنج|درجا|تثبیت|بدون\s*تغییر|ثابت)\s*(بشه|بشود|بمونه|بماند|باشه|باشد|بزنه|بزند)/i.test(text))) &&
     !/(چیست|چیه|تعریف|یعنی چه|مفهوم)/i.test(text);
   const isMultiScenario = /سناریو\s*(?:اول|۱|الف)[\s\S]*سناریو\s*(?:دوم|۲|ب)/i.test(text);
@@ -2123,6 +2140,8 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
   // ── پیش‌محاسبه قطعی فرض‌های سناریویی همین نوبت (یک‌بار، برای تقدم صحیح مراحل)
   let ast = whatIfParser ? whatIfParser(text, []) : null;
   let assumptions = extractAssumptions(ast);
+  let scenarioChainOut = null; // FIX-5 (Phase 2-3E-B): زنجیره فرض‌های فعال
+  let scenarioTargetOut = null;
   let replayText = null;
   {
     const candidateAsset = (explicitEntities.length > 0 ? explicitEntities[0] : null) ||
@@ -2142,7 +2161,8 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
       }
     }
   }
-  const isSelfContainedMulti = !!(ast && ast.type === 'MULTI_SCENARIO_COMPARISON' && assumptions.length >= 2);
+  // FIX-3 (Phase 2-3E-B): WHAT_IF با ≥۲ فرض نیز سناریوی چندفرضی خودبسنده است (نه فقط مقایسه سناریو الف/ب)
+  const isSelfContainedMulti = !!(ast && (ast.type === 'MULTI_SCENARIO_COMPARISON' || ast.type === 'WHAT_IF') && assumptions.length >= 2);
   const scenarioRef = isSelfContainedMulti ? null : detectScenarioReference(text);
 
   let resolutionPath = 'NO_CONTEXT';
@@ -2295,7 +2315,10 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
   // ── مرحله ۴: عملیات روی مجموعه مقایسه (ADD / REMOVE / REPLACE / SET)
   // گارد: عملیات مجموعه تنها در بافت مقایسه/دارایی فعال و بیرون از پرسش دانشنامه‌ای اعمال می‌شود
   const comparisonContextAssets = (mem.comparisonSet.assets.length > 0) ? mem.comparisonSet.assets.slice() : mem.activeAssets.slice();
+  // FIX-6 (Phase 2-3E-B): نوبتی که فرض درصدی صریح What-If دارد، در مرحله سناریو ثبت می‌شود؛ عملیات مجموعه آن را نمی‌رباید
+  const hasWhatIfAssumptionsThisTurn = Array.isArray(assumptions) && assumptions.length > 0;
   const comparisonStageApplicable = comparisonOp.operation &&
+    !hasWhatIfAssumptionsThisTurn &&
     !baseCir.requiresKnowledge &&
     baseCir.intent.primary !== INTENTS.KNOWLEDGE_QUERY &&
     (comparisonOp.assets.length > 0 || comparisonContextAssets.length >= 2);
@@ -2384,12 +2407,44 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
   if (resolutionPath === 'NO_CONTEXT') {
     const isMulti = isSelfContainedMulti;
     const activeScenario = mem.scenario;
+    // FIX-5 (Phase 2-3E-B): پیگیری هدف سناریوی فعال («… چقدر می‌شود؟») — بکارگیری زنجیره کامل فرض‌های ثبت‌شده، بدون حذف هیچ فرض
+    const hasShockThisTurn = assumptions.length > 0 || !!shockFragment;
+    const targetAskPattern = /چقدر[\s\u200c]*(?:می[\s\u200c]*ش(?:ود|ه)|خواهد[\s\u200c]*شد|بشه|شود)/;
+    const followUpTarget = (!hasShockThisTurn && targetAskPattern.test(wmNormalize(text)) && Array.isArray(baseCir.entities))
+      ? (baseCir.entities.map(e => e.value).filter(v => v === 'GOLD18' || v === 'XAU')[0] || null)
+      : null;
+    if (activeScenario && followUpTarget) {
+      const byId = {};
+      mem.scenarioLedger.forEach(e => { if (e && e.scenarioId) byId[e.scenarioId] = e; });
+      const chain = [];
+      const seenIds = new Set();
+      let cursor = activeScenario.scenarioId || null;
+      while (cursor && byId[cursor] && !seenIds.has(cursor)) { seenIds.add(cursor); chain.unshift(byId[cursor]); cursor = byId[cursor].parentScenarioId; }
+      if (chain.length === 0) chain.push(activeScenario);
+      const parts = chain
+        .map(e => buildSyntheticScenarioQuery(e.asset, e.mode || 'PERCENT_CHANGE', Number(e.value), e.direction || 'UP'))
+        .filter(Boolean);
+      if (parts.length > 0) {
+        const synthText = parts.join(' و ');
+        const synthCir = analyzeQuery(synthText, recentContext, todayEvidence);
+        if (synthCir) resolvedCir = synthCir;
+        mem.activeAssets = [followUpTarget];
+        focusAsset(followUpTarget, mem);
+        mem.activeTopic = { kind: 'ASSET', value: followUpTarget, source: WM_TRUST.SYSTEM_STATE, trust: WM_TRUST_CLASS[WM_TRUST.SYSTEM_STATE] };
+        mem.state = WM_STATES.SCENARIO_CONTEXT;
+        scenarioChainOut = chain.map(e => ({ asset: e.asset, mode: e.mode || 'PERCENT_CHANGE', value: Number(e.value), direction: e.direction || 'UP' }));
+        scenarioTargetOut = followUpTarget;
+        resolutionPath = 'SCENARIO_TARGET_CARRY_OVER';
+        semanticSources.push(WM_TRUST.SYSTEM_STATE, WM_TRUST.USER_TEXT);
+        notes.push('پیگیری هدف سناریوی فعال: پاسخ از زنجیره کامل فرض‌های ثبت‌شده ساخته می‌شود (هیچ فرضی حذف نمی‌شود).');
+      }
+    }
     const isScenarioIntent = baseCir.intent.primary === INTENTS.WHAT_IF ||
       baseCir.intent.primary === INTENTS.SCENARIO_COMPARISON ||
       !!ast || !!shockFragment ||
       (baseCir.intent.primary === INTENTS.CLARIFICATION_REQUIRED && (baseCir.intent.secondary || []).includes(INTENTS.WHAT_IF));
 
-    if (isScenarioIntent) {
+    if (resolutionPath === 'NO_CONTEXT' && isScenarioIntent) {
       if (isMulti) {
         // دفتر سناریو: ثبت همه فروض نوبت در Ledger با ایندکس (پشتیبانی «سناریوی دوم»)
         let parentId = activeScenario ? activeScenario.scenarioId : null;
@@ -2585,6 +2640,8 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
         state: mem.state,
         timeframe: mem.timeframe,
         scenario: mem.scenario ? { scenarioId: mem.scenario.scenarioId, parentScenarioId: mem.scenario.parentScenarioId, asset: mem.scenario.asset, mode: mem.scenario.mode, value: mem.scenario.value, direction: mem.scenario.direction } : null,
+        scenarioChain: scenarioChainOut,
+        scenarioTarget: scenarioTargetOut,
         comparisonSet: { mode: mem.comparisonSet.mode, assets: mem.comparisonSet.assets.slice() },
         pendingClarification: mem.pendingClarification ? { id: mem.pendingClarification.id, missing: mem.pendingClarification.missing.slice() } : null
       }),
@@ -2911,6 +2968,17 @@ function toEnDigits(str) {
 function toFaDigits(str) {
   if (str == null) return '—';
   return String(str).replace(/[0-9]/g, d => '۰۱۲۳۴۵۶۷۸۹'[+d]);
+}
+
+// Phase 2-3E-B: نمایش درصد با دقت کافی (تا ۲ اعشار، بدون صفر اضافی) — «۴٫۹۶٪» به‌جای گرد‌شده «۵٪»
+function fmtPctSmart(pct) {
+  const num = Number(pct);
+  if (!Number.isFinite(num)) return '—';
+  const absTwo = Math.abs(Math.round(num * 100) / 100);
+  const txt = (Math.abs(absTwo - Math.round(absTwo)) < 1e-9)
+    ? String(Math.round(absTwo))
+    : absTwo.toFixed(2).replace(/0$/, '');
+  return (num < 0 ? '-' : '') + toFaDigits(txt).replace('.', '٫');
 }
 
 function fmtFa(num, dec = 0) {
@@ -3595,11 +3663,19 @@ function buildUnifiedEvidenceContract(params = {}) {
   };
 }
 
+  // FIX-1 (Phase 2-3E-B): تبدیل قطعی واژه‌های عددی فارسی پیش از «درصد» (مثال: «هشت درصد» → «8 درصد»)
+  const FA_NUMBER_WORDS = { 'یک':1,'دو':2,'سه':3,'چهار':4,'پنج':5,'شش':6,'هفت':7,'هشت':8,'نه':9,'ده':10,'یازده':11,'دوازده':12,'سیزده':13,'چهارده':14,'پانزده':15,'شانزده':16,'هفده':17,'هجده':18,'نوزده':19,'بیست':20,'سی':30,'چهل':40,'پنجاه':50,'شصت':60,'هفتاد':70,'هشتاد':80,'نود':90,'صد':100 };
+  const FA_NUMBER_WORD_ORDER = Object.keys(FA_NUMBER_WORDS).sort((a, b) => b.length - a.length);
+  const expandFaNumberWords = (rawText) => String(rawText || '').replace(
+    new RegExp('(' + FA_NUMBER_WORD_ORDER.join('|') + ')\\s*(?=(?:درصد|٪|%))', 'g'),
+    (m) => String(FA_NUMBER_WORDS[m.trim()] !== undefined ? FA_NUMBER_WORDS[m.trim()] : m)
+  );
+
 function parseWhatIfQuery(rawText, recentContext = []) {
   const text = String(rawText || '').trim();
   if (!text) return null;
 
-  const isHypo = (/(اگر|فرض\s*کن|چنانچه|در\s*صورتی\s*که|احتمال|برسه\s*به|بشه|بشود|سناریو)/i.test(text) ||
+  const isHypo = (/(اگر|فرض\s*کن|چنانچه|در\s*صورتی\s*که|احتمال|برسه\s*به|بشه|بشود|سناریو|رشد[\s\u200c]*(?:کند|کنه|کنند|می[\s\u200c]*کند|نماید|یابد|داشته[\s\u200c]*(?:باشد|باشه)|بگیرد|بگیره)|بالا[\s\u200c]*(?:برود|بره|می[\s\u200c]*رود|میره|بیاید|بیاد|بکشد)|پایین[\s\u200c]*(?:برود|بره|می[\s\u200c]*رود|میره|بیاید|بیاد|بکشد)|مثبت[\s\u200c]*(?:شود|بشه|می[\s\u200c]*شود|میشه)|منفی[\s\u200c]*(?:شود|بشه|می[\s\u200c]*شود|میشه)|افزایش[\s\u200c]*(?:یابد|پیدا[\s\u200c]*(?:کند|کنه))|کاهش[\s\u200c]*(?:یابد|پیدا[\s\u200c]*(?:کند|کنه))|افت[\s\u200c]*(?:کند|کنه|نماید|داشته[\s\u200c]*(?:باشد|باشه))|ریزش[\s\u200c]*(?:کند|کنه|نماید|داشته[\s\u200c]*(?:باشد|باشه))|کم[\s\u200c]*(?:شود|بشه)|کمتر[\s\u200c]*(?:شود|بشه)|نزول[\s\u200c]*(?:کند|کنه)|سقوط[\s\u200c]*(?:کند|کنه)|صعود[\s\u200c]*(?:کند|کنه)|جهش[\s\u200c]*(?:کند|کنه)|تقویت[\s\u200c]*(?:شود|بشه)|تضعیف[\s\u200c]*(?:شود|بشه)|گران[\s\u200c]*(?:شود|تر[\s\u200c]*(?:شود|بشه))|ارزان[\s\u200c]*(?:شود|تر[\s\u200c]*(?:شود|بشه))|بیشتر[\s\u200c]*(?:شود|بشه)|پامپ[\s\u200c]*(?:کند|بشه|شود)|دامپ[\s\u200c]*(?:کند|بشه|شود)|[+\-\u2212][\s\u200c]*[0-9\u06F0-\u06F9\u0660-\u0669]+(?:\.[0-9\u06F0-\u06F9\u0660-\u0669]+)?[\s\u200c]*(?:درصد|٪|%))/i.test(text) ||
     (/(ساید|رنج|درجا|تثبیت|بدون\s*تغییر|ثابت)\s*(بشه|بشود|بمونه|بماند|باشه|باشد|بزنه|بزند)/i.test(text))) &&
     !/(چیست|چیه|تعریف|یعنی چه|مفهوم)/i.test(text);
   if (!isHypo) return null;
@@ -3626,6 +3702,7 @@ function parseWhatIfQuery(rawText, recentContext = []) {
 }
 
 function parseSingleWhatIf(text, recentContext = []) {
+    text = expandFaNumberWords(text); // FIX-1: واژه‌های عددی فارسی
   // دایره واژگان صعودی و شوک مثبت (Bullish / Up Shock Terms)
   const UP_TERMS = [
     'بالا برود', 'بالا بره', 'بره بالا', 'برود بالا', 'بالا بیاید', 'بیاید بالا', 'بالا بیاد', 'بیاد بالا', 'بالا بکشه', 'بکشه بالا', 'بالا کشیدن',
@@ -3637,7 +3714,7 @@ function parseSingleWhatIf(text, recentContext = []) {
     'گرون بشه', 'گران شود', 'گرونتر بشه', 'گرانتر شود', 'گرانتر بشود',
     'تقویت شود', 'تقویت بشه', 'قوی‌تر شود', 'قوی تر بشه',
     'پامپ کند', 'پامپ بشه', 'پامپ شود', 'پامپ',
-    'بالا', 'رشد', 'صعود', 'افزایشی'
+    'بالا', 'رشد', 'صعود', 'افزایشی', 'مثبت'
   ];
 
   // دایره واژگان نزولی و شوک منفی (Bearish / Down Shock Terms)
@@ -3652,7 +3729,7 @@ function parseSingleWhatIf(text, recentContext = []) {
     'سقوط کند', 'سقوط کنه', 'سقوط داشته باشد', 'سقوط داشته باشه', 'سقوط',
     'تضعیف شود', 'تضعیف بشه',
     'دامپ کند', 'دامپ بشه', 'دامپ شود', 'دامپ',
-    'پایین', 'افت', 'ریزش', 'کاهش', 'نزول', 'کاهشی'
+    'پایین', 'افت', 'ریزش', 'کاهش', 'نزول', 'کاهشی', 'منفی'
   ];
 
   // دایره واژگان خنثی، رنج، ساید، تثبیت و بدون تغییر (Neutral / Sideways / Range-Bound Terms)
@@ -3674,9 +3751,12 @@ function parseSingleWhatIf(text, recentContext = []) {
     if (s.includes('اونس') || s.includes('انس') || s.includes('xau')) return 'XAU';
     if (s.includes('نقره') || s.includes('xag')) return 'XAG';
     if (s.includes('سکه') || s.includes('sekee') || s.includes('coin')) return 'COIN';
-    if (s.includes('طلای ۱۸') || s.includes('طلا ۱۸') || s.includes('طلای ۱۷') || s.includes('طلای هجده') || s.includes('آب‌شده') || s.includes('آب شده') || s.includes('مثقال') || s.includes('طلا') || s.includes('gold18') || s.includes('gold')) return 'GOLD18';
+    // FIX-2 (Phase 2-3E-B): تطبیق اختصاصی پیش از تطبیق عمومی
+    if (s.includes('طلای ۱۸') || s.includes('طلا ۱۸') || s.includes('طلای ۱۷') || s.includes('طلای هجده') || s.includes('آب‌شده') || s.includes('آب شده') || s.includes('مثقال') || s.includes('gold18')) return 'GOLD18';
     if (s.includes('تتر') || s.includes('usdt')) return 'USDT';
     if (s.includes('دلار') || s.includes('usd')) return 'USD';
+    // تطبیق عمومی «طلا» فقط پس از «دلار» — دارایی هدف («طلا چقدر می‌شود؟») نباید شوک دلار را برباید
+    if (s.includes('طلا') || s.includes('gold')) return 'GOLD18';
     if (s.includes('نفت') || s.includes('oil') || s.includes('brent')) return 'OIL';
     if (s.includes('شاخص') || s.includes('بورس') || s.includes('tse')) return 'TSE_INDEX';
     return null;
@@ -3723,7 +3803,10 @@ function parseSingleWhatIf(text, recentContext = []) {
     const pctMatch = enClause.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:درصد|٪|percent|%)/i);
     if (pctMatch) {
       const val = parseFloat(pctMatch[1]);
-      let direction = 'UP';
+      // FIX-1 (Phase 2-3E-B): در نبود واژه جهت، نشانه صریح عدد (+/−) جهت شوک را تعیین می‌کند
+      const explicitDownSign = /[-\u2212]\s*[0-9]+(?:\.[0-9]+)?\s*(?:درصد|٪|percent|%)/i.test(enClause);
+      const explicitUpSign = /\+\s*[0-9]+(?:\.[0-9]+)?\s*(?:درصد|٪|percent|%)/i.test(enClause);
+      let direction = explicitDownSign ? 'DOWN' : (explicitUpSign ? 'UP' : 'UP');
       if (DOWN_TERMS.some(t => clause.includes(t))) direction = 'DOWN';
       else if (NEUTRAL_TERMS.some(t => clause.includes(t))) direction = 'NEUTRAL';
       else if (UP_TERMS.some(t => clause.includes(t))) direction = 'UP';
@@ -4004,8 +4087,8 @@ function renderWhatIfResponse(simResult) {
       `• ارزش ذاتی هر گرم طلای ۱۸ عیار: **${fmtFa(scenarioB.hypothetical.gold18Intrinsic)} تومان**\n` +
       `• ارزش ذاتی سکه امامی: **${fmtFa(scenarioB.hypothetical.coinIntrinsic)} تومان**\n\n` +
       `### تفاوت سناریوی دوم نسبت به اول\n` +
-      `• هر گرم طلای ۱۸ عیار: **${signG18}${fmtFa(comparison.diffGold18.amount)} تومان** (${signG18}${fmtFa(comparison.diffGold18.pct, 1)}٪)\n` +
-      `• سکه امامی: **${signCoin}${fmtFa(comparison.diffCoin.amount)} تومان** (${signCoin}${fmtFa(comparison.diffCoin.pct, 1)}٪)\n\n` +
+      `• هر گرم طلای ۱۸ عیار: **${signG18}${fmtFa(comparison.diffGold18.amount)} تومان** (${signG18}${fmtPctSmart(comparison.diffGold18.pct)}٪)\n` +
+      `• سکه امامی: **${signCoin}${fmtFa(comparison.diffCoin.amount)} تومان** (${signCoin}${fmtPctSmart(comparison.diffCoin.pct)}٪)\n\n` +
       `🔒 **سلب مسئولیت:** این مقادیر بر مبنای ارزش ذاتی محتوای فلزی محاسبه شده‌اند و پیش‌بینی قیمت معامله‌شده در بازار نیستند؛ حباب، عرضه و تقاضا و انتظارات تورمی می‌توانند نتیجه واقعی را متفاوت کنند.`;
   }
 
@@ -4026,11 +4109,11 @@ function renderWhatIfResponse(simResult) {
     `### 📋 مفروضات سناریو (نسبت به نرخ مبنا)\n` +
     assumptionLines + `\n\n` +
     `### 📊 نتیجه محاسباتی سناریو\n` +
-    `• ارزش ذاتی هر گرم طلای ۱۸ عیار: **${fmtFa(hypothetical.gold18Intrinsic)} تومان** — تغییر: **${signG18}${fmtFa(deltas.gold18.amount)} تومان** (${signG18}${fmtFa(deltas.gold18.pct, 1)}٪)\n` +
+    `• ارزش ذاتی هر گرم طلای ۱۸ عیار: **${fmtFa(hypothetical.gold18Intrinsic)} تومان** — تغییر: **${signG18}${fmtFa(deltas.gold18.amount)} تومان** (${signG18}${fmtPctSmart(deltas.gold18.pct)}٪)\n` +
     `• مظنه معادل هر مثقال طلای ۱۷ عیار: حدود **${fmtFa(hypothetical.mithqal17)} تومان**\n` +
-    `• ارزش ذاتی محتوای فلزی سکه امامی: **${fmtFa(hypothetical.coinIntrinsic)} تومان** — تغییر: **${signCoin}${fmtFa(deltas.coin.amount)} تومان** (${signCoin}${fmtFa(deltas.coin.pct, 1)}٪)\n\n` +
+    `• ارزش ذاتی محتوای فلزی سکه امامی: **${fmtFa(hypothetical.coinIntrinsic)} تومان** — تغییر: **${signCoin}${fmtFa(deltas.coin.amount)} تومان** (${signCoin}${fmtPctSmart(deltas.coin.pct)}٪)\n\n` +
     `### 🔍 تفسیر\n` +
-    `در این سناریو، اثر ترکیبی مفروضات بالا، ارزش ذاتی مبنای طلای داخلی را حدود **${signG18}${fmtFa(deltas.gold18.pct, 1)}٪** جابه‌جا می‌کند؛ در واقع بخش عمده این تغییر از مسیر دلار و اونس جهانی به ارزش فلزی طلا منتقل می‌شود.\n\n` +
+    `در این سناریو، اثر ترکیبی مفروضات بالا، ارزش ذاتی مبنای طلای داخلی را حدود **${signG18}${fmtPctSmart(deltas.gold18.pct)}٪** جابه‌جا می‌کند؛ در واقع بخش عمده این تغییر از مسیر دلار و اونس جهانی به ارزش فلزی طلا منتقل می‌شود.\n\n` +
     `🔒 **سلب مسئولیت:** این نتیجه اثر ریاضی تغییر مفروضات است و پیش‌بینی قطعی قیمت بازار نیست؛ حباب، عرضه و تقاضا، انتظارات تورمی و شرایط بازار داخلی می‌توانند قیمت معامله‌شده را متفاوت کنند.`;
 }
 
