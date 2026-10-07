@@ -12,6 +12,7 @@
 * حفظ کامل لایه‌های پیشین: قرارداد جامع شواهد فاز ۲-۲، بازیابی دانش فاز ۲-۱، موتور نیت/موجودیت فاز ۱-۲ و نرمال‌ساز/شبیه‌ساز فاز ۱-۱ (بدون تغییر رفتار).
 * حفظ ممنوعیت‌های دامنه: بدون Structured Outputs، بدون Vectorize، بدون تغییر اسکیمای D1 (صرفاً `SELECT`)، بدون KV/Durable Object و بدون ماندگاری گفتگو در ورکر (ورکر در این فاز Stateless می‌ماند).
 * افزودن سوئیت `tests/test_v247_working_memory.js` (**۶۶ آزمون رفتاری**) و پاس شدن ۱۰۰٪ کل **۵۳ سوئیت آزمون جامع QA** بدون هیچ رگرسیون در فازهای پیشین.
+* استقرار واقعی روی Cloudflare Workers (`market-ai-interpreter`) از طریق Workers Builds پس از push به GitHub؛ ممیزی زنده: `phase = Phase 2-3B (Working Memory & Multi-Turn Anaphora State Machine)` و `workingMemory = ENABLED` در `GET /api/health`، پاسخ سالم `POST /api/ai/chat`، قرارداد شواهد v1.0 در `POST /api/ai/evidence/build` و فعال بودن گاردریل ضدسیگنال روی نسخه مستقر.
 
 ## [v4.0.0-phase2-2] — سازنده یکپارچه شواهد و قرارداد جامع شواهد (Unified Evidence Builder Core & Grounded Evidence Contract v1.0)
 * ایجاد ماژول مستقل `js/engine/evidence-builder.js` به‌عنوان لایه جمع‌آوری، نرمال‌سازی، طبقه‌بندی، ثبت اصالت (`provenance`)، حذف تکرار و کنترل کیفیت شواهد (نه موتور استدلال و نه LLM).
