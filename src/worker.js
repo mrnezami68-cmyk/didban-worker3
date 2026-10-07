@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3E-B (Multi-Asset Scenario Binding & Intent Gate Fix)';
+const WORKER_PHASE = 'Phase 2-3F-B1 (Data Integrity & Crypto Evidence Repair)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -141,6 +141,7 @@ export default {
         evidenceBuilder: 'ENABLED (Phase 2-2 Unified Evidence Contract v1.0)',
         workingMemory: 'ENABLED (Phase 2-3B Semantic Working Memory v1.0 — client-carried, stateless worker)',
         scenarioBinding: 'ENABLED (Phase 2-3E-B Multi-Asset Scenario Binding & Intent Gate v1.0)',
+        dataIntegrity: 'ENABLED (Phase 2-3F-B1 Crypto Evidence Normalization & pct24h->change24h Mapping v1.0)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
@@ -1495,16 +1496,17 @@ const ResponsePresentation = (() => {
 
     wanted.forEach((asset) => {
       const item = items.find((x) => x && x.asset === asset);
-      if (!item || !Number.isFinite(Number(item.value))) {
+      if (!item || item.value === null || item.value === undefined || item.value === '' || !Number.isFinite(Number(item.value))) {
         lines.push(`• **${assetLabel(asset)}:** داده لحظه‌ای در دسترس نیست.`);
         return;
       }
       const unit = item.unit === 'USD' ? 'دلار' : (item.unit === 'USD_PER_OUNCE' ? 'دلار' : (item.unit === 'INDEX_POINT' ? 'واحد' : 'تومان'));
       const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
       let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} ${unit}**`;
-      const ch = item.metadata && Number.isFinite(Number(item.metadata.change24h)) ? Number(item.metadata.change24h) : null;
+      const chRaw = item.metadata ? item.metadata.change24h : null;
+      const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
       if (ch !== null) {
-        const sign = ch > 0 ? '+' : '';
+        const sign = ch > 0 ? '+' : (ch < 0 ? '-' : ''); // FIX-B1-4: حفظ علامت کاهش (formatter فقط قدر مطلق است)
         line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**`;
       }
       lines.push(line);
@@ -1537,15 +1539,16 @@ const ResponsePresentation = (() => {
     const obsLines = [];
     target.forEach((asset) => {
       const item = items.find((x) => x && x.asset === asset);
-      if (!item || !Number.isFinite(Number(item.value))) {
+      if (!item || item.value === null || item.value === undefined || item.value === '' || !Number.isFinite(Number(item.value))) {
         obsLines.push(`• **${assetLabel(asset)}:** داده لحظه‌ای برای این دارایی در دسترس نیست.`);
         return;
       }
       const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
       let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} تومان**`;
-      const ch = item.metadata && Number.isFinite(Number(item.metadata.change24h)) ? Number(item.metadata.change24h) : null;
+      const chRaw = item.metadata ? item.metadata.change24h : null;
+      const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
       if (ch !== null) {
-        const sign = ch > 0 ? '+' : '';
+        const sign = ch > 0 ? '+' : (ch < 0 ? '-' : ''); // FIX-B1-4: حفظ علامت کاهش (formatter فقط قدر مطلق است)
         const flat = Math.abs(ch) < 0.05;
         line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**${flat ? ' (عملاً بدون تغییر محسوس)' : ''}`;
       }
@@ -3041,6 +3044,17 @@ function normalizePriceContract(rawVal, assetKey, source = 'LIVE', baselineMap =
     };
   }
 
+  // ۲.۵. دارایی‌های دیجیتال (FIX-B1-1): واحد دلاری؛ بدون هیچ تبدیل اختراعی — واحد صریح غیردلاری عبور می‌کند
+  if (['BTC', 'ETH', 'SOL'].includes(key) && (originalUnit === 'UNKNOWN' || originalUnit === 'USD')) {
+    return {
+      value: num,
+      unit: 'USD',
+      source,
+      asset: key,
+      auditTrace: { originalValue, originalUnit: 'USD', normalizedValue: num, normalizedUnit: 'USD', conversion: 'NONE' }
+    };
+  }
+
   // ۳. اولویت تطبیق با واحد صریح در صورت وجود (Explicit Unit Matching)
   if (originalUnit === 'RIAL' || originalUnit === 'IRR' || originalUnit === 'RIAL_PER_GRAM') {
     normalizedValue = Math.round(num / 10);
@@ -3133,10 +3147,14 @@ function normalizePriceContract(rawVal, assetKey, source = 'LIVE', baselineMap =
 
 function normalizeEvidenceMap(todayEvidence = {}) {
   const map = {};
-  const keys = ['usd', 'usdt', 'gold18', 'sekee', 'xau', 'xag', 'oil', 'tse_index', 'tse_equal', 'silver1g'];
+  // FIX-B1-1 (Phase 2-3F-B1): دارایی‌های دیجیتال (BTC/ETH/SOL) نیز در نرمال‌سازی حفظ می‌شوند
+  const keys = ['usd', 'usdt', 'gold18', 'sekee', 'xau', 'xag', 'oil', 'tse_index', 'tse_equal', 'silver1g', 'btc', 'eth', 'sol'];
   for (const k of keys) {
     const item = todayEvidence[k];
     const norm = normalizePriceContract(item, k.toUpperCase(), (item && item.source) || 'LIVE', map);
+    // FIX-B1-3: نگاشت قطعی pct24h → change24h؛ نامعلوم = null (هرگز صفر تلقی نمی‌شود)
+    const rawChange = (item && typeof item === 'object') ? ((item.pct24h !== undefined) ? item.pct24h : ((item.change24h !== undefined) ? item.change24h : null)) : null;
+    norm.change24h = (rawChange === null || rawChange === undefined || rawChange === '' || !Number.isFinite(Number(rawChange))) ? null : Number(rawChange);
     map[k] = norm;
   }
   return map;
@@ -3248,7 +3266,8 @@ function extractLiveEvidence(rawEvidence = {}, entityFilter = null, options = {}
       unit = v.unit && v.unit !== 'UNKNOWN' ? v.unit : meta.unit;
       sourceName = v.source || 'LIVE_FEED';
       auditTrace = v.auditTrace || null;
-      change24h = (v.change24h !== undefined) ? v.change24h : null;
+      const rawChange = (v.change24h !== undefined) ? v.change24h : ((v.pct24h !== undefined) ? v.pct24h : null); // FIX-B1-3
+      change24h = (rawChange === null || rawChange === undefined || rawChange === '' || !Number.isFinite(Number(rawChange))) ? null : Number(rawChange);
     }
 
     if (typeof value === 'number' && Number.isFinite(value)) {
