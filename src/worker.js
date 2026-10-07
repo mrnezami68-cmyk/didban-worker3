@@ -305,14 +305,34 @@ export default {
           }), { headers: corsHeaders });
         }
 
+        // Phase 2-3C — گفت‌وگوی عمومی (Small Talk): پاسخ قطعی، کوتاه و بدون فراخوانی LLM/شواهد
+        const smallTalk = detectSmallTalk(userMsg);
+        if (smallTalk) {
+          return new Response(JSON.stringify({
+            success: true,
+            reply: buildSmallTalkResponse(smallTalk.kind),
+            source: 'SMALL_TALK_DETERMINISTIC',
+            responseLevel: RESPONSE_LEVELS.SHORT,
+            timestamp: new Date().toISOString()
+          }), { headers: corsHeaders });
+        }
+
         let replyText = '';
         let sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
 
         // ۰. نرمال‌سازی کانونیکال شواهد ورودی بازار
         const normalizedEvidence = normalizeEvidenceMap(todayEvidence);
 
-        // ۱. تحلیل نیت، استخراج موجودیت‌ها، بافت مکالمه و نیازمندی شواهد (Intent & Entity Engine v4)
-        const queryAnalysis = analyzeQuery(userMsg, history, todayEvidence);
+        // ۱. تحلیل نیت: در صورت ارسال CIR حل‌شده با حافظه کاری (Phase 2-3C) از آن استفاده می‌شود
+        const analysisHistory = history.filter(h => h && h.role === 'user');
+        const clientCir = (body.queryAnalysis && typeof body.queryAnalysis === 'object' &&
+          body.queryAnalysis.intent && body.queryAnalysis.context && body.queryAnalysis.context.resolutionPath)
+          ? body.queryAnalysis
+          : null;
+        const queryAnalysis = clientCir || analyzeQuery(userMsg, analysisHistory, todayEvidence);
+        const requestLevel = classifyResponseLevel(queryAnalysis, userMsg);
+        const isTechnicalRequest = detectTechnicalRequest(userMsg);
+        const isWhyQuestion = detectWhyQuery(userMsg);
 
         // ۲. واکنش سریع به گاردریل ضدسیگنال
         if (queryAnalysis.intent.primary === 'ANTI_SIGNAL_RESTRICTED') {
@@ -350,7 +370,60 @@ export default {
           }), { headers: corsHeaders });
         }
 
-        // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی (Deterministic What-If Engine v4)
+        // ۳.۵. ساخت قرارداد جامع شواهد (یک‌بار؛ مبنای گاردهای ارائه و پاسخ نهایی)
+        const unifiedEvidenceContract = buildUnifiedEvidenceContract({
+          query: userMsg,
+          cir: queryAnalysis,
+          rawEvidence: normalizedEvidence,
+          retrievedKnowledge,
+          options: { alreadyNormalized: true }
+        });
+
+        // ۳.۶. گارد قابلیت افق زمانی (Phase 2-3C): بدون جانشینی LIVE به‌جای HISTORICAL/FORECAST
+        const tfCtx = (queryAnalysis.context && queryAnalysis.context.timeframe) ? queryAnalysis.context.timeframe : null;
+        const missingCaps = (unifiedEvidenceContract.capabilities && Array.isArray(unifiedEvidenceContract.capabilities.missingEvidence))
+          ? unifiedEvidenceContract.capabilities.missingEvidence
+          : [];
+        const needsHistorical = !!(tfCtx && tfCtx.requiresHistoricalData);
+        const needsForecast = !!(tfCtx && tfCtx.requiresForecastCapability);
+        const isConditionalScenarioRequest = (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON');
+        if (((needsHistorical && missingCaps.includes('HISTORICAL_DATA')) || needsForecast) && !isConditionalScenarioRequest) {
+          const degradedReply = buildDegradedTimeframeResponse(queryAnalysis);
+          if (degradedReply) {
+            return new Response(JSON.stringify({
+              success: true,
+              reply: degradedReply,
+              source: 'TIMEFRAME_CAPABILITY_GUARD',
+              responseLevel: RESPONSE_LEVELS.STANDARD,
+              interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+              retrievedKnowledge,
+              unifiedEvidence: unifiedEvidenceContract,
+              timestamp: new Date().toISOString()
+            }), { headers: corsHeaders });
+          }
+        }
+
+        // ۳.۷. پاسخ کوتاه و متناسب وضعیت بازار (MARKET_STATUS) — بدون گزارش‌های نامرتبط
+        if (queryAnalysis.intent.primary === 'MARKET_STATUS' &&
+            Array.isArray(queryAnalysis.entities) && queryAnalysis.entities.length >= 1 && queryAnalysis.entities.length <= 2 &&
+            !queryAnalysis.requiresKnowledge) {
+          const liveForStatus = (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.live))
+            ? unifiedEvidenceContract.evidence.live
+            : [];
+          const conciseReply = buildConciseMarketStatusResponse(queryAnalysis, liveForStatus);
+          return new Response(JSON.stringify({
+            success: true,
+            reply: conciseReply,
+            source: 'DETERMINISTIC_MARKET_STATUS',
+            responseLevel: RESPONSE_LEVELS.SHORT,
+            interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+            retrievedKnowledge,
+            unifiedEvidence: unifiedEvidenceContract,
+            timestamp: new Date().toISOString()
+          }), { headers: corsHeaders });
+        }
+
+        // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی
         if (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON') {
           const whatIfAst = parseWhatIfQuery(userMsg, history);
           if (whatIfAst) {
@@ -388,7 +461,11 @@ export default {
         const isLlmEligible = checkDailyLlmEligible(clientIp, 40);
         if (isLlmEligible && env && (env.AI || env.OPENROUTER_API_KEY)) {
           try {
-            const chatSystemPrompt = buildAdvisorChatSystemPrompt(todayEvidence, queryAnalysis);
+            const chatSystemPrompt = buildAdvisorChatSystemPrompt(todayEvidence, queryAnalysis, {
+              responseLevel: requestLevel,
+              isWhyQuestion,
+              isTechnicalRequest
+            });
             const chatMessages = [
               { role: 'system', content: chatSystemPrompt },
               ...history.slice(-4).map(h => ({
@@ -404,7 +481,7 @@ export default {
               const cfAiRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
                 messages: chatMessages,
                 temperature: 0.2,
-                max_tokens: 650,
+                max_tokens: responseTokenCap(requestLevel),
                 top_p: 0.9
               });
               if (cfAiRes && (cfAiRes.response || cfAiRes.text)) {
@@ -423,7 +500,7 @@ export default {
                   model: 'openrouter/free',
                   messages: chatMessages,
                   temperature: 0.2,
-                  max_tokens: 650
+                  max_tokens: responseTokenCap(requestLevel)
                 })
               });
               if (orRes.ok) {
@@ -448,19 +525,14 @@ export default {
           sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
         }
 
-        // ۷. ساخت قرارداد جامع شواهد (Phase 2-2) بر اساس شواهد موجود و برنامه وابستگی
-        const unifiedEvidenceContract = buildUnifiedEvidenceContract({
-          query: userMsg,
-          cir: queryAnalysis,
-          rawEvidence: normalizedEvidence,
-          retrievedKnowledge,
-          options: { alreadyNormalized: true }
-        });
+        // ۷. لایه ارائه (Phase 2-3C): پاک‌سازی نشت فرمول/ثابت کانونیکال/نام موتور از پاسخ کاربرنما
+        replyText = sanitizeUserFacingResponse(replyText, { technical: isTechnicalRequest });
 
         return new Response(JSON.stringify({
           success: true,
           reply: replyText,
           source: sourceUsed,
+          responseLevel: requestLevel,
           interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
           retrievedKnowledge,
           unifiedEvidence: unifiedEvidenceContract,
@@ -886,6 +958,391 @@ function analyzeQuery(rawText, recentContext = [], todayEvidence = {}) {
     status: 'FALLBACK'
   };
 }
+
+/* ==========================================================================
+   Phase 2-3C — Response Presentation & Conversational Quality Layer (v1.0)
+   «Computation is internal. Explanation is user-facing.»
+   ========================================================================== */
+
+const ResponsePresentation = (() => {
+  const RP_VERSION = '1.0';
+
+  const RP_LEVELS = {
+    SHORT: 'SHORT',
+    STANDARD: 'STANDARD',
+    DEEP: 'DEEP'
+  };
+
+  // برچسب فارسی دارایی‌ها (فقط ارائه)
+  const ASSET_LABELS = {
+    USD: 'دلار آزاد',
+    USDT: 'تتر',
+    GOLD18: 'طلای ۱۸ عیار',
+    COIN: 'سکه امامی',
+    SEKEE: 'سکه امامی',
+    XAU: 'اونس جهانی طلا',
+    XAG: 'نقره',
+    OIL: 'نفت',
+    TSE_INDEX: 'شاخص کل بورس تهران',
+    TSE_EQUAL: 'شاخص هم‌وزن',
+    BTC: 'بیت‌کوین',
+    ETH: 'اتریوم',
+    SOL: 'سولانا',
+    DXY: 'شاخص دلار (DXY)',
+    SILVER1G: 'نقره (هر گرم)',
+    MITHQAL17: 'مثقال طلای ۱۷ عیار'
+  };
+
+  const assetLabel = (asset) => ASSET_LABELS[String(asset || '').toUpperCase()] || String(asset || 'دارایی');
+
+  /* ==========================================================================
+     ابزارهای متنی و عددی (ارائه)
+     ========================================================================== */
+
+  const toFaDigits = (value) => String(value === null || value === undefined ? '' : value)
+    .replace(/[0-9]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+
+  const fmtNumber = (num, decimals = 0) => {
+    const n = Number(num);
+    if (!Number.isFinite(n)) return '—';
+    const fixed = Math.abs(n).toLocaleString('en-US', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
+    });
+    // جداکننده هزارگان و اعشار فارسی
+    return toFaDigits(fixed).replace(/,/g, '٬').replace(/\./g, '٫');
+  };
+
+  const normalizeText = (raw) => String(raw || '')
+    .replace(/[\u200c\u200e\u200f]/g, ' ')
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  /* ==========================================================================
+     ۱) تشخیص گفت‌وگوی عمومی (Small Talk) — قطعی و بدون LLM
+     ========================================================================== */
+
+  // هر پرسش حاوی واژگان دامنه مالی هرگز Small Talk محسوب نمی‌شود
+  const DOMAIN_GUARD = /(قیمت|چنده|چقدر|نرخ|دلار|تتر|طلا|سکه|نقره|اونس|مثقال|بورس|شاخص|بیت|اتریوم|سولانا|کریپتو|رمزارز|حباب|اسپرد|تحلیل|پیش‌بینی|پیش بینی|سناریو|سیگنال|بخرم|بفروشم|ورود|خروج|سود|ضرر|تورم|طلا|بازار|سرمایه|پرتفوی|پورتفوی|درصد|هفته|ماه|فردا|دیروز|امروز)/;
+
+  const SMALL_TALK_PATTERNS = [
+    { kind: 'IDENTITY_GENDER', re: /(زن\s*هستی|مرد\s*هستی|جنسیت|دختری\s*یا\s*پسری|دختر\s*هستی|پسر\s*هستی|خانم\s*هستی|آقا\s*هستی)/ },
+    { kind: 'IDENTITY_LOVE', re: /(عاشق\s*می\s*شی|عاشق\s*میشی|عاشق\s*بشی|عاشق\s*شدی|احساس\s*داری|قلب\s*داری|دوست\s*دختر\s*داری|دوست\s*پسر\s*داری|ازدواج\s*کردی)/ },
+    { kind: 'INTRO_REQUEST', re: /(خودت\s*را?\s*معرفی|خودتو\s*معرفی|معرفی\s*کن|کی\s*هستی|کی\s*هستید|شما\s*کی\s*هستید|تو\s*کی\s*هستی|تو\s*چی\s*هستی)/ },
+    { kind: 'THANKS', re: /(ممنون|مرسی|سپاس|تشکر|دستت\s*درد\s*نکنه|خسته\s*نباشی|خسته\s*نباشید|لطف\s*کردی|دست\s*مریزاد)/ },
+    { kind: 'FAREWELL', re: /(خداحافظ|خدانگهدار|خدانگهدار|بای\s*بای|خدافظ|فعلا\s*خدانگهدار)/ },
+    { kind: 'JOKE', re: /(جوک|شوخی\s*کن|یه\s*شوخی|بامزه|بخندون)/ },
+    { kind: 'HOW_ARE_YOU', re: /(چطوری|چطورید|حالت\s*چطوره|حالتون\s*چطوره|خوبی\s*\?*$|خوبید|چه\s*خبر|چه\s*خبرا|چه\s*خبری|اوضاع\s*چطوره|چطوره\s*حال)/ },
+    { kind: 'GREETING', re: /(^|\s)(سلام|درود|صبح\s*بخیر|روز\s*بخیر|عصر\s*بخیر|شب\s*بخیر|شب\s*خوش|وقت\s*بخیر|سلامت\s*باشی)(\s|$|[!،.؟?])/ },
+    { kind: 'CASUAL', re: /(حوصلم\s*سررفته|گپ\s*بزنیم|با\s*من\s*حرف\s*بزن|یه\s*گپ|دوست\s*داری\s*حرف\s*بزنیم)/ }
+  ];
+
+  /**
+   * تشخیص قطعی گفت‌وگوی عمومی. در صورت وجود هر واژه دامنه مالی، null برمی‌گردد.
+   * @returns {null | {kind: string, matched: string}}
+   */
+  const detectSmallTalk = (rawText) => {
+    const s = normalizeText(rawText);
+    if (!s) return null;
+    if (DOMAIN_GUARD.test(s)) return null;
+    if (s.length > 120) return null; // پیام‌های بلند عمومی نیستند (کنترل دامنه)
+    for (const p of SMALL_TALK_PATTERNS) {
+      const m = s.match(p.re);
+      if (m) return { kind: p.kind, matched: m[0] };
+    }
+    return null;
+  };
+
+  /* ==========================================================================
+     ۲) پاسخ‌های گفت‌وگوی عمومی (طبیعی، کوتاه، بدون ادامه‌دهی بی‌پایان)
+     ========================================================================== */
+
+  const buildSmallTalkResponse = (kind, options = {}) => {
+    const name = options.userName ? ` ${options.userName}` : '';
+    const replies = {
+      GREETING:
+        'سلام، وقت بخیر 🌱\n\nمن دستیار هوشمند تحلیلی «دیدبان بازار» هستم و می‌توانم در بررسی قیمت‌ها و رفتار دارایی‌ها، نسبت‌ها و روابط بین بازارها، سناریوهای فرضی، حباب و اسپرد و مفاهیم اقتصادی به شما کمک کنم.\n\nچطور می‌توانم کمکتان کنم؟',
+      HOW_ARE_YOU:
+        'سلام، وقت بخیر 🌱\n\nممنونم، آماده‌ام کمک کنم. من دستیار تحلیلی «دیدبان بازار» هستم؛ کافی است بگویید کدام دارایی یا کدام موضوع بازار را بررسی کنیم.\n\nمثلاً می‌توانید بپرسید: «قیمت دلار چنده؟» یا «اگر دلار بالا بره، طلا چه می‌شود؟»',
+      THANKS:
+        'خواهش می‌کنم 🙏\n\nاگر سؤال تحلیلی دیگری درباره بازار، دارایی‌ها یا سناریوها داشتید، در خدمتم.',
+      FAREWELL:
+        'خدانگهدار 🌱\n\nهر زمان سؤال تحلیلی داشتید، در خدمتم.',
+      INTRO_REQUEST:
+        'من «دستیار هوشمند تحلیلی دیدبان بازار» هستم — یک دستیار هوش مصنوعی برای تحلیل داده‌های بازار ایران و جهان.\n\nکارهایی که می‌توانم انجام دهم:\n• بررسی قیمت و تغییرات دارایی‌ها (دلار، تتر، طلا، سکه، ارز دیجیتال، بورس)\n• مقایسه و تحلیل روابط بین دارایی‌ها\n• شبیه‌سازی سناریوهای فرضی (مثلاً «اگر دلار ۱۰٪ بالا بره...»)\n• تبیین مفاهیم اقتصادی مانند حباب، اسپرد و نسبت‌ها\n\nو یک نکته شفاف: من سیگنال معاملاتی، نقطه ورود/خروج یا پیشنهاد خرید و فروش صادر نمی‌کنم؛ تحلیل و داده ارائه می‌کنم و تصمیم نهایی با شماست.\n\nچه چیزی را بررسی کنیم؟',
+      IDENTITY_GENDER:
+        'من یک دستیار هوش مصنوعی هستم و جنسیت انسانی ندارم؛ یک برنامهٔ نرم‌افزاری تحلیلی برای داده‌های بازار هستم.\n\nاگر سؤال تحلیلی درباره بازار دارید، در خدمتم.',
+      IDENTITY_LOVE:
+        'من احساس انسانی و زندگی شخصی ندارم و برنامه‌ای برای تحلیل داده‌های بازار هستم؛ بنابراین عاشق نمی‌شوم 🙂\n\nاما اگر دوست دارید درباره مفاهیم و داده‌های مرتبط با اقتصاد، بازار یا رفتار دارایی‌ها گفت‌وگو کنیم، با کمال میل همراهی می‌کنم.',
+      JOKE:
+        'شوخ‌طبعی من محدود به دنیای داده‌هاست 🙂\n\nترجیح می‌دهم با یک تحلیل واقعی سرگرم‌تان کنم؛ مثلاً بپرسید «دلار چنده؟» یا «اگر طلا ۵٪ بریزد چه می‌شود؟»',
+      CASUAL:
+        'خوشحال می‌شوم همراهی کنم 🌱\n\nمن در تحلیل داده‌های بازار مهارت دارم؛ اگر دوست دارید می‌توانیم از یک موضوع بازار شروع کنیم؛ مثلاً رفتار طلا و دلار یا وضعیت ارز دیجیتال.\n\nموضوع را بگویید تا بررسی کنم.'
+    };
+    return replies[kind] || replies.GREETING;
+  };
+
+  /* ==========================================================================
+     ۳) طبقه‌بندی طول پاسخ (Response Length Policy)
+     ========================================================================== */
+
+  const DEEP_MARKERS = /(جامع|کامل|مفصل|عمیق|مقایسه\s*سناریو|سناریوهای\s*مختلف|تحلیل\s*چند|گزارش\s*کامل|همه\s*جانبه|جامع‌ترین)/;
+  const STANDARD_MARKERS = /(چرا|تحلیل|بررسی|مقایسه|رابطه|علت|دلیل|تأثیر|تاثیر|چه\s*می\s*شود|چه\s*میشه|وضعیت)/;
+
+  /**
+   * طبقه‌بندی سطح پاسخ: SHORT (پرسش ساده) / STANDARD (تحلیل یک دارایی) / DEEP (سناریو/پژوهش چندعاملی)
+   */
+  const classifyResponseLevel = (cir = null, rawText = '') => {
+    const text = normalizeText(rawText);
+    const intent = (cir && cir.intent && cir.intent.primary) ? cir.intent.primary : null;
+    const entityCount = (cir && Array.isArray(cir.entities)) ? cir.entities.length : 0;
+
+    if (detectSmallTalk(text)) return RP_LEVELS.SHORT;
+    if (DEEP_MARKERS.test(text)) return RP_LEVELS.DEEP;
+    if (intent === 'SCENARIO_COMPARISON') return RP_LEVELS.DEEP;
+    if (intent === 'WHAT_IF') {
+      return (cir && (cir.requiresCalculation === false)) ? RP_LEVELS.STANDARD : RP_LEVELS.DEEP;
+    }
+    if (intent === 'MARKET_STATUS') {
+      return entityCount >= 3 ? RP_LEVELS.STANDARD : RP_LEVELS.SHORT;
+    }
+    if (intent === 'KNOWLEDGE_QUERY') return RP_LEVELS.SHORT;
+    if (intent === 'CLARIFICATION_REQUIRED' || intent === 'ANTI_SIGNAL_RESTRICTED') return RP_LEVELS.SHORT;
+    if (intent === 'MARKET_ANALYSIS' || intent === 'ASSET_ANALYSIS') {
+      return STANDARD_MARKERS.test(text) ? RP_LEVELS.STANDARD : RP_LEVELS.STANDARD;
+    }
+    if (intent === 'COMPARISON') return RP_LEVELS.STANDARD;
+    return STANDARD_MARKERS.test(text) ? RP_LEVELS.STANDARD : RP_LEVELS.SHORT;
+  };
+
+  /* ==========================================================================
+     ۴) تشخیص درخواست فنی/معماری (استثنای مجاز نمایش فرمول و جزئیات داخلی)
+     ========================================================================== */
+
+  const TECHNICAL_REQUEST_PATTERNS = /(فرمول|نحوه\s*محاسبه|روش\s*محاسبه|چطور\s*محاسبه|چه\s*طور\s*محاسبه|محاسبه\s*می\s*کنید|محاسبه\s*میکنید|الگوریتم|کدوم\s*موتور|چه\s*موتوری|معماری|چطور\s*کار\s*می\s*کنی|چطور\s*کار\s*میکنی|نحوه\s*عملکرد|چه\s*مدلی|جزئیات\s*محاسبه)/;
+
+  const detectTechnicalRequest = (rawText) => TECHNICAL_REQUEST_PATTERNS.test(normalizeText(rawText));
+
+  const detectWhyQuery = (rawText) => /(^|\s)(چرا|به\s*چه\s*دلیل|چگونه\s*است\s*که|علت\s*چیست|دلیل\s*چیست)/.test(normalizeText(rawText));
+
+  /* ==========================================================================
+     ۵) پاک‌سازی پاسخ کاربرنما از نشت فرمول/موتور (Presentation Sanitizer)
+     ========================================================================== */
+
+  // ثابت‌های کانونیکال محاسبات (فقط داخلی؛ نمایش آن‌ها در پاسخ کاربر ممنوع است)
+  const MAGIC_CONSTANT_PATTERNS = [
+    /4\.3318/g, /31\.1035/g, /8\.133/g, /0\.750/g, /0\.900/g,
+    /۴[٫.]۳۳۱۸/g, /۳۱[٫.]۱۰۳۵/g, /۸[٫.]۱۳۳/g, /۰[٫.]۷۵۰/g, /۰[٫.]۹۰۰/g
+  ];
+
+  // نام موتورها/اجزای داخلی که نباید در پاسخ عادی ظاهر شوند
+  const ENGINE_NAME_PATTERNS = [
+    /\(?\s*Deterministic\s+What-?If\s+Engine[^)]*\)?/gi,
+    /\(?\s*What-?If\s+Engine\s*v?\d*(\.\d+)?\s*\)?/gi,
+    /\(?\s*Unified\s+Evidence\s+Builder[^)]*\)?/gi,
+    /\(?\s*Evidence\s+Builder[^)]*\)?/gi,
+    /\(?\s*Intent\s*&\s*Entity\s+Engine[^)]*\)?/gi,
+    /\(?\s*Intent\s+Engine[^)]*\)?/gi,
+    /\(?\s*Knowledge\s+Retriever[^)]*\)?/gi,
+    /\(?\s*Scenario\s+Engine[^)]*\)?/gi,
+    /\(?\s*Financial\s+Normalizer[^)]*\)?/gi,
+    /\(?\s*Dynamic\s+Multi-?Asset\s+Synthesis[^)]*\)?/gi,
+    /\(?\s*Worker\s*3[^)]*\)?/g,
+    /هوش\s*لبه/g,
+    /موتور\s*قطعی\s*What-?If/g
+  ];
+
+  // واژگان فنی نمایشی
+  const TECH_PHRASE_PATTERNS = [
+    /\(?\s*Mathematical\s+Step-?by-?Step\s*\)?/gi,
+    /\(?\s*Pearson\s*R\s*\)?/gi,
+    /\(?\s*canonical\s+factor\s*\)?/gi,
+    /\(?\s*internal\s+engine\s*\)?/gi,
+    /\(?\s*debug\s+trace\s*\)?/gi,
+    /گام(?:‌|\s)*های\s*محاسبات\s*دقیق\s*کانونیکال/g,
+    /محاسبه(?:‌|\s)*ی\s*دقیق\s*کانونیکال/g,
+    /محاسبات\s*دقیق\s*کانونیکال/g,
+    /ضریب\s*(?:۴[٫.]۳۳۱۸|4\.3318)\s*کانونیکال/g,
+    /فرمول\s*کانونیکال/g,
+    /نسبت(?:‌|\s)*های\s*همبستگی\s*پیرسون(?:\s*تاریخی)?/g
+  ];
+
+  const LATEX_BLOCK_RE = /\$\$[\s\S]*?\$\$/g;
+  const LATEX_INLINE_RE = /\$(?!\$)([^$]{1,400})\$(?!\$)/g;
+  const LATEX_COMMAND_RE = /\\(?:approx|frac|times|text\s*\{[^}]*\}|mathbf\s*\{[^}]*\}|quad|Big|left|right|cdot|div|sim|le|ge|pm|to)\s*/g;
+  const LATEX_LEFTOVER_RE = /[\\{}]/g;
+
+  /**
+   * پاک‌سازی پاسخ کاربرنما از نشت فرمول، ثابت‌های کانونیکال و نام اجزای داخلی.
+   * در صورت درخواست صریح فنی کاربر، متن دست‌نخورده بازگردانده می‌شود.
+   * @param {string} rawText متن پاسخ
+   * @param {{technical?: boolean}} options
+   */
+  const sanitizeUserFacingResponse = (rawText, options = {}) => {
+    if (rawText === null || rawText === undefined) return '';
+    let text = String(rawText);
+    if (options.technical === true) return text;
+
+    // ۱. حذف بلوک‌ها و اسپن‌های فرمولی
+    text = text.replace(LATEX_BLOCK_RE, ' ');
+    text = text.replace(LATEX_INLINE_RE, ' ');
+    text = text.replace(LATEX_COMMAND_RE, ' ');
+    text = text.replace(LATEX_LEFTOVER_RE, ' ');
+
+    // ۲. حذف ثابت‌های کانونیکال محاسبات
+    MAGIC_CONSTANT_PATTERNS.forEach((re) => { text = text.replace(re, ' '); });
+
+    // ۳. حذف نام موتورها و اجزای داخلی
+    ENGINE_NAME_PATTERNS.forEach((re) => { text = text.replace(re, ' '); });
+
+    // ۴. حذف واژگان فنی نمایشی
+    TECH_PHRASE_PATTERNS.forEach((re) => { text = text.replace(re, ' '); });
+
+    // ۵. پاک‌سازی ساختاری: عناوین خالی، خطوط بی‌محتوا و فاصله‌های اضافی
+    text = text
+      .split('\n')
+      .map((line) => {
+        let l = line
+          .replace(/[ \t]{2,}/g, ' ')
+          .replace(/\s+([،؛.!؟?])/g, '$1')
+          .replace(/\(\s*\)/g, '')
+          .replace(/\[\s*\]/g, '')
+          .replace(/[ \t]+$/g, '');
+        const stripped = l.replace(/[#*•\-–—:؛,.،()\sٔ﷼٬۰-۹0-9٪%+=]/g, '');
+        if (l.trim() && stripped.length === 0) return ''; // خط فقط از علامت/عدد ساخته شده است
+        return l;
+      })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\s+|\s+$/g, '');
+
+    return text;
+  };
+
+  /* ==========================================================================
+     ۶) پاسخ کنترل‌شده در نبود قابلیت تاریخی/پیش‌بینی (بدون جانشینی LIVE)
+     ========================================================================== */
+
+  const TIMEFRAME_LABELS = {
+    TODAY: 'امروز', YESTERDAY: 'دیروز', TOMORROW: 'فردا',
+    PAST_WEEK: 'هفته گذشته', NEXT_WEEK: 'هفته آینده', END_OF_WEEK: 'تا پایان هفته',
+    THIS_WEEK: 'هفته جاری', PAST_MONTH: 'ماه گذشته', NEXT_MONTH: 'ماه آینده',
+    THIS_MONTH: 'ماه جاری', END_OF_MONTH: 'تا پایان ماه', NEXT_DAYS: 'روزهای آینده'
+  };
+
+  const buildDegradedTimeframeResponse = (cir = {}, options = {}) => {
+    const tf = (cir && cir.context && cir.context.timeframe) || (cir && cir.timeframe) || {};
+    const label = TIMEFRAME_LABELS[tf.label] || 'این بازه زمانی';
+    const assets = (cir && Array.isArray(cir.entities) && cir.entities.length > 0)
+      ? cir.entities.map((e) => assetLabel(e.value)).join('، ')
+      : 'دارایی موردنظر';
+
+    if (tf.horizon === 'HISTORICAL') {
+      return `🕓 **داده تاریخی در دسترس نیست:**\n\n` +
+        `برای بررسی ${assets} در «${label}»، به داده‌های تاریخی (مشاهدات روزانه گذشته) نیاز است و این داده‌ها در حال حاضر در دسترس این سامانه نیست.\n\n` +
+        `به همین دلیل، وضعیت «${label}» را با قیمت لحظه‌ای جایگزین نمی‌کنم؛ چون این دو یکی نیستند و می‌تواند گمراه‌کننده باشد.\n\n` +
+        `اگر مایل باشید می‌توانم:\n` +
+        `• وضعیت لحظه‌ای ${assets} را ارائه کنم (با ذکر صریح اینکه داده لحظه‌ای است، نه تاریخی)\n` +
+        `• یا یک سناریوی فرضی (مثلاً «اگر ۵٪ تغییر کند...») را بررسی کنم.`;
+    }
+
+    if (tf.horizon === 'FORECAST') {
+      return `🔮 **پیش‌بینی عددی ارائه نمی‌شود:**\n\n` +
+        `برای «${label}»، این سامانه پیش‌بینی قطعی یا هدف قیمتی اعلام نمی‌کند؛ زیرا موتور پیش‌بینی در دسترس نیست و هیچ عددی را به‌عنوان آینده جعل نمی‌کنم.\n\n` +
+        `در عوض می‌توانم:\n` +
+        `• سناریوهای شرطی را بررسی کنم (مثلاً «اگر ${assets} ۵٪ تغییر کند، اثر محاسباتی آن چه می‌شود؟»)\n` +
+        `• وضعیت فعلی، تغییرات اخیر و ساختار بازار را ارائه کنم.`;
+    }
+
+    if (tf.horizon === 'AMBIGUOUS') {
+      return `🧭 **بازه زمانی نیازمند شفاف‌سازی است:**\n\n` +
+        `عبارت «${label}» می‌تواند دو معنا داشته باشد: (۱) از ابتدای این بازه تا امروز، یا (۲) کل بازه گذشته.\n\n` +
+        `لطفاً مشخص کنید کدام مورد را می‌خواهید تا تحلیل درست انجام شود.`;
+    }
+
+    return '';
+  };
+
+  /* ==========================================================================
+     ۷) پاسخ کوتاه وضعیت بازار (MARKET_STATUS) — بدون گزارش‌های نامرتبط
+     ========================================================================== */
+
+  /**
+   * ساخت پاسخ کوتاه و دقیق وضعیت دارایی از شواهد زنده (بدون محاسبه جدید).
+   * @param {Object} cir تحلیل نیت حل‌شده
+   * @param {Array} liveItems اقلام شواهد زنده (evidence.live) با فیلدهای asset/value/unit/metadata
+   */
+  const buildConciseMarketStatusResponse = (cir = {}, liveItems = []) => {
+    const entities = (cir && Array.isArray(cir.entities)) ? cir.entities.map((e) => e.value) : [];
+    const wanted = entities.length > 0 ? entities.slice(0, 2) : [];
+    const items = Array.isArray(liveItems) ? liveItems : [];
+    const lines = [];
+
+    wanted.forEach((asset) => {
+      const item = items.find((x) => x && x.asset === asset);
+      if (!item || !Number.isFinite(Number(item.value))) {
+        lines.push(`• **${assetLabel(asset)}:** داده لحظه‌ای در دسترس نیست.`);
+        return;
+      }
+      const unit = item.unit === 'USD' ? 'دلار' : (item.unit === 'USD_PER_OUNCE' ? 'دلار' : (item.unit === 'INDEX_POINT' ? 'واحد' : 'تومان'));
+      const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
+      let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} ${unit}**`;
+      const ch = item.metadata && Number.isFinite(Number(item.metadata.change24h)) ? Number(item.metadata.change24h) : null;
+      if (ch !== null) {
+        const sign = ch > 0 ? '+' : '';
+        line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**`;
+      }
+      lines.push(line);
+    });
+
+    if (lines.length === 0) {
+      return `⚠️ برای این پرسش، داده زنده‌ای در دسترس نیست.\n\nاگر دارایی موردنظر را نام ببرید (مثلاً دلار، طلا، سکه یا تتر)، وضعیت آن را بررسی می‌کنم.`;
+    }
+
+    const head = wanted.length === 1
+      ? `💵 **وضعیت لحظه‌ای ${assetLabel(wanted[0])}:**\n\n`
+      : `📊 **وضعیت لحظه‌ای دارایی‌های درخواستی:**\n\n`;
+
+    const tail = '\n\nبرای تحلیل عمیق‌تر یا سناریوی فرضی، بپرسید مثلاً: «اگر ۱۰٪ بالا بره چه می‌شود؟»';
+
+    return head + lines.join('\n') + tail;
+  };
+
+  return {
+    RP_VERSION,
+    RP_LEVELS,
+    ASSET_LABELS,
+    assetLabel,
+    toFaDigits,
+    fmtNumber,
+    normalizeText,
+    detectSmallTalk,
+    buildSmallTalkResponse,
+    classifyResponseLevel,
+    detectTechnicalRequest,
+    detectWhyQuery,
+    sanitizeUserFacingResponse,
+    buildDegradedTimeframeResponse,
+    buildConciseMarketStatusResponse
+  };
+})();
+
+// پل دسترسی سطح‌اسکریپت ورکر به لایه ارائه (Phase 2-3C)
+const RESPONSE_LEVELS = ResponsePresentation.RP_LEVELS;
+const detectSmallTalk = ResponsePresentation.detectSmallTalk;
+const buildSmallTalkResponse = ResponsePresentation.buildSmallTalkResponse;
+const classifyResponseLevel = ResponsePresentation.classifyResponseLevel;
+const detectTechnicalRequest = ResponsePresentation.detectTechnicalRequest;
+const detectWhyQuery = ResponsePresentation.detectWhyQuery;
+const sanitizeUserFacingResponse = ResponsePresentation.sanitizeUserFacingResponse;
+const buildDegradedTimeframeResponse = ResponsePresentation.buildDegradedTimeframeResponse;
+const buildConciseMarketStatusResponse = ResponsePresentation.buildConciseMarketStatusResponse;
+
+// سقف توکن پاسخ بر اساس سیاست طول (SHORT / STANDARD / DEEP)
+const responseTokenCap = (level) => (level === ResponsePresentation.RP_LEVELS.SHORT ? 300
+  : (level === ResponsePresentation.RP_LEVELS.DEEP ? 750 : 480));
 
 /* ==========================================================================
    Phase 2-3B — Working Memory & Multi-Turn Anaphora State Machine
@@ -3270,7 +3727,7 @@ function renderWhatIfResponse(simResult) {
   if (!simResult) return '';
 
   if (simResult.status === 'AMBIGUOUS') {
-    return `❓ **نیازمند شفاف‌سازی متغیر فرضی (Clarification Required):**\n\n` +
+    return `❓ **نیازمند شفاف‌سازی متغیر فرضی:**\n\n` +
       `درخواست سناریوی فرضی شما دریافت شد، اما مشخص نگردید شوک مدنظر بر کدام دارایی (دلار آزاد، اونس جهانی طلا، سکه یا طلای ۱۸ عیار) اعمال شود.\n\n` +
       `💡 **پیشنهادهای سناریویی:**\n` +
       `• *اگر دلار ۱۰ درصد رشد کند، قیمت طلا و سکه چقدر می‌شود؟*\n` +
@@ -3281,54 +3738,50 @@ function renderWhatIfResponse(simResult) {
     return `⚠️ **خطای دامنه ارقام فرضی:**\n` + simResult.error;
   }
 
+  // حالت مقایسه دو سناریو (Scenario A vs Scenario B)
   if (simResult.status === 'SUCCESS_MULTI') {
     const { scenarioA, scenarioB, comparison } = simResult;
     const signG18 = comparison.diffGold18.amount >= 0 ? '+' : '';
     const signCoin = comparison.diffCoin.amount >= 0 ? '+' : '';
 
-    return `⚖️ **مقایسه تطبیقی دو سناریوی مفروض (Scenario A vs Scenario B):**\n\n` +
-      `### ۱. سناریوی اول (A):\n` +
-      `• مفروضات: دلار **${fmtFa(scenarioA.hypothetical.usd)} تومان** | اونس طلا **${fmtFa(scenarioA.hypothetical.xau)} دلار**\n` +
-      `• ارزش ذاتی هر گرم ۱۸ عیار: **${fmtFa(scenarioA.hypothetical.gold18Intrinsic)} تومان**\n` +
+    return `⚖️ **مقایسه دو سناریوی فرضی:**\n\n` +
+      `### سناریوی اول\n` +
+      `• دلار آزاد: **${fmtFa(scenarioA.hypothetical.usd)} تومان** | اونس جهانی: **${fmtFa(scenarioA.hypothetical.xau)} دلار**\n` +
+      `• ارزش ذاتی هر گرم طلای ۱۸ عیار: **${fmtFa(scenarioA.hypothetical.gold18Intrinsic)} تومان**\n` +
       `• ارزش ذاتی سکه امامی: **${fmtFa(scenarioA.hypothetical.coinIntrinsic)} تومان**\n\n` +
-      `### ۲. سناریوی دوم (B):\n` +
-      `• مفروضات: دلار **${fmtFa(scenarioB.hypothetical.usd)} تومان** | اونس طلا **${fmtFa(scenarioB.hypothetical.xau)} دلار**\n` +
-      `• ارزش ذاتی هر گرم ۱۸ عیار: **${fmtFa(scenarioB.hypothetical.gold18Intrinsic)} تومان**\n` +
+      `### سناریوی دوم\n` +
+      `• دلار آزاد: **${fmtFa(scenarioB.hypothetical.usd)} تومان** | اونس جهانی: **${fmtFa(scenarioB.hypothetical.xau)} دلار**\n` +
+      `• ارزش ذاتی هر گرم طلای ۱۸ عیار: **${fmtFa(scenarioB.hypothetical.gold18Intrinsic)} تومان**\n` +
       `• ارزش ذاتی سکه امامی: **${fmtFa(scenarioB.hypothetical.coinIntrinsic)} تومان**\n\n` +
-      `### 📊 موازنه و اختلاف سناریوی B نسبت به A:\n` +
-      `• **اختلاف گرم طلای ۱۸ عیار:** **${signG18}${fmtFa(comparison.diffGold18.amount)} تومان** (${signG18}${fmtFa(comparison.diffGold18.pct, 2)}٪)\n` +
-      `• **اختلاف ارزش ذاتی سکه:** **${signCoin}${fmtFa(comparison.diffCoin.amount)} تومان** (${signCoin}${fmtFa(comparison.diffCoin.pct, 2)}٪)\n\n` +
-      `🔒 **سلب مسئولیت:** مقادیر محاسبه‌شده بر مبنای ارزش ذاتی خالص فلزی استخراج گردیده است.`;
+      `### تفاوت سناریوی دوم نسبت به اول\n` +
+      `• هر گرم طلای ۱۸ عیار: **${signG18}${fmtFa(comparison.diffGold18.amount)} تومان** (${signG18}${fmtFa(comparison.diffGold18.pct, 1)}٪)\n` +
+      `• سکه امامی: **${signCoin}${fmtFa(comparison.diffCoin.amount)} تومان** (${signCoin}${fmtFa(comparison.diffCoin.pct, 1)}٪)\n\n` +
+      `🔒 **سلب مسئولیت:** این مقادیر بر مبنای ارزش ذاتی محتوای فلزی محاسبه شده‌اند و پیش‌بینی قیمت معامله‌شده در بازار نیستند؛ حباب، عرضه و تقاضا و انتظارات تورمی می‌توانند نتیجه واقعی را متفاوت کنند.`;
   }
 
   const { hypothetical, deltas, traceSteps } = simResult;
 
   const assumptionLines = traceSteps.map(t => {
     const sign = t.changePct > 0 ? '+' : '';
-    const name = t.asset === 'USD' ? 'دلار آزاد' : (t.asset === 'XAU' ? 'اونس جهانی طلا (XAU)' : (t.asset === 'GOLD18' ? 'طلای ۱۸ عیار' : (t.asset === 'COIN' ? 'سکه امامی' : t.asset)));
+    const name = t.asset === 'USD' ? 'دلار آزاد' : (t.asset === 'XAU' ? 'اونس جهانی طلا' : (t.asset === 'GOLD18' ? 'طلای ۱۸ عیار' : (t.asset === 'COIN' ? 'سکه امامی' : t.asset)));
     const unit = t.unit === 'USD' ? 'دلار' : 'تومان';
-    const neutralTag = (t.assumption && t.assumption.direction === 'NEUTRAL') ? ' [بدون تغییر / ساید]' : '';
-    return `• **${name}:** از **${fmtFa(t.from)} ${unit}** ──► به **${fmtFa(t.to)} ${unit}** (${sign}${fmtFa(t.changePct, 1)}٪ نسبت به نرخ مبنا${neutralTag})`;
+    const neutralTag = (t.assumption && t.assumption.direction === 'NEUTRAL') ? ' (بدون تغییر)' : '';
+    return `• **${name}:** از **${fmtFa(t.from)} ${unit}** به حدود **${fmtFa(t.to)} ${unit}** — یعنی **${sign}${fmtFa(t.changePct, 1)}٪**${neutralTag}`;
   }).join('\n');
 
   const signG18 = deltas.gold18.amount >= 0 ? '+' : '';
   const signCoin = deltas.coin.amount >= 0 ? '+' : '';
 
-  return `🧮 **شبیه‌ساز تحلیلی سناریوی فرضی (Deterministic What-If Engine v4):**\n\n` +
-    `### 📋 متغیرهای مفروض ورودی سناریو:\n` +
+  return `🧮 **شبیه‌ساز تحلیلی سناریوی فرضی:**\n\n` +
+    `### 📋 مفروضات سناریو (نسبت به نرخ مبنا)\n` +
     assumptionLines + `\n\n` +
-    `### 📐 گام‌های محاسبات دقیق کانونیکال (Mathematical Step-by-Step):\n` +
-    `• **۱. ارزش ذاتی تئوریک هر گرم طلای ۱۸ عیار:**\n` +
-    `  $$\\text{ارزش ذاتی ۱۸} = \\frac{\\text{اونس (${fmtFa(hypothetical.xau)})} \\times \\text{دلار (${fmtFa(hypothetical.usd)})} \\times 0.750}{31.1035} = \\mathbf{${fmtFa(hypothetical.gold18Intrinsic)} \\text{ تومان}}$$\n` +
-    `  ↳ *تغییر نسبت به مبنای امروز:* **${signG18}${fmtFa(deltas.gold18.amount)} تومان** (${signG18}${fmtFa(deltas.gold18.pct, 2)}٪)\n\n` +
-    `• **۲. مظنه تئوریک یک مثقال طلای ۱۷ عیار آب‌شده (ضریب ۴٫۳۳۱۸ کانونیکال):**\n` +
-    `  $$\\text{مظنه مثقال ۱۷} = 4.3318 \\times ${fmtFa(hypothetical.gold18Intrinsic)} = \\mathbf{${fmtFa(hypothetical.mithqal17)} \\text{ تومان}}$$\n\n` +
-    `• **۳. ارزش ذاتی محتوای طلای سکه تمام طرح جدید (امامی):**\n` +
-    `  $$\\text{ارزش ذاتی سکه} = \\frac{8.133 \\times 0.900 \\times ${fmtFa(hypothetical.xau)} \\times ${fmtFa(hypothetical.usd)}}{31.1035} = \\mathbf{${fmtFa(hypothetical.coinIntrinsic)} \\text{ تومان}}$$\n` +
-    `  ↳ *تغییر نسبت به مبنای امروز:* **${signCoin}${fmtFa(deltas.coin.amount)} تومان** (${signCoin}${fmtFa(deltas.coin.pct, 2)}٪)\n\n` +
-    `### 🔍 تحلیل اقتصادی موازنه نیروها:\n` +
-    `در این سناریو، بردار برآیند اثر هم‌زمان محرک‌ها به تغییر خالص **${signG18}${fmtFa(deltas.gold18.pct, 2)}٪** در ارزش مبنای طلای داخلی منتهی می‌گردد.\n\n` +
-    `🔒 **سلب مسئولیت:** این محاسبات بر مبنای ارزش ذاتی ریاضی شمش و محتوای فلزی استخراج شده و حباب احتمالی بازار و پرمیوم ناشی از انتظارات تورمی در آن لحاظ نشده است.`;
+    `### 📊 نتیجه محاسباتی سناریو\n` +
+    `• ارزش ذاتی هر گرم طلای ۱۸ عیار: **${fmtFa(hypothetical.gold18Intrinsic)} تومان** — تغییر: **${signG18}${fmtFa(deltas.gold18.amount)} تومان** (${signG18}${fmtFa(deltas.gold18.pct, 1)}٪)\n` +
+    `• مظنه معادل هر مثقال طلای ۱۷ عیار: حدود **${fmtFa(hypothetical.mithqal17)} تومان**\n` +
+    `• ارزش ذاتی محتوای فلزی سکه امامی: **${fmtFa(hypothetical.coinIntrinsic)} تومان** — تغییر: **${signCoin}${fmtFa(deltas.coin.amount)} تومان** (${signCoin}${fmtFa(deltas.coin.pct, 1)}٪)\n\n` +
+    `### 🔍 تفسیر\n` +
+    `در این سناریو، اثر ترکیبی مفروضات بالا، ارزش ذاتی مبنای طلای داخلی را حدود **${signG18}${fmtFa(deltas.gold18.pct, 1)}٪** جابه‌جا می‌کند؛ در واقع بخش عمده این تغییر از مسیر دلار و اونس جهانی به ارزش فلزی طلا منتقل می‌شود.\n\n` +
+    `🔒 **سلب مسئولیت:** این نتیجه اثر ریاضی تغییر مفروضات است و پیش‌بینی قطعی قیمت بازار نیست؛ حباب، عرضه و تقاضا، انتظارات تورمی و شرایط بازار داخلی می‌توانند قیمت معامله‌شده را متفاوت کنند.`;
 }
 
 // ============================================================================
@@ -4044,8 +4497,11 @@ function isNumberInAllowedSet(targetNum, allowedSet, tolerance = 0.08) {
 // مهندسی پرامپت ساختاریافته (Prompt Engineering)
 // ============================================================================
 
-function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null) {
+function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null, presentation = {}) {
   const evSummary = JSON.stringify(todayEvidence, null, 2);
+  const responseLevel = presentation.responseLevel || 'STANDARD';
+  const isWhy = presentation.isWhyQuestion === true;
+  const isTechnical = presentation.isTechnicalRequest === true;
   let analysisConstraint = '';
   if (queryAnalysis && queryAnalysis.intent) {
     analysisConstraint = `\n۵. ساختار تحلیل نیت و اهداف استعلام کاربر:
@@ -4055,21 +4511,31 @@ function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null) 
    - شواهد کلیدی موردنیاز (Required Evidence): ${queryAnalysis.evidencePlan?.required?.join('، ') || 'شواهد پایه'}\n`;
   }
 
-  return `شما «مشاور هوشمند و اقتصادسنج دیدبان بازار» هستید؛ یک دستیار تحلیلی مالی ارشد با تسلط بر تئوری‌های نوین مالی، اقتصاد کلان ایران، بازار طلا، ارز، کریپتو و بورس تهران.
+  return `شما «مشاور هوشمند تحلیلی دیدبان بازار» هستید؛ یک دستیار تحلیلی مالی با تسلط بر اقتصاد کلان ایران، بازار طلا، ارز، کریپتو و بورس تهران.
 
 ضوابط محوری پاسخ‌گویی:
-۱. ادبیات حرفه‌ای، فاخر، روان و تحلیلی با رعایت لحن مشاور امین و آگاه.
-۲. سد کامل ضدسیگنال: هرگز سیگنال قطعی خرید/فروش، نقطه ورود/خروج یا تضمین سود صادر نکنید. به جای آن، ریسک، بتای دارایی، نسبت‌های آماری و موازنه پورتفوی را تبیین نمایید.
-۳. فرمول‌های ریاضی و کانونیکال:
-   - ارزش ذاتی سکه تمام = [(وزن 8.133 × عیار 0.900 × اونس جهانی × دلار آزاد) / 31.1035] + حق ضرب.
-   - ارزش ذاتی هر گرم طلای ۱۸ عیار = (اونس جهانی × دلار آزاد × 0.750) / 31.1035 (یا مظنه مثقال ۱۷ / 4.3318).
-   - مظنه مثقال ۱۷ عیار آب‌شده = 4.3318 × قیمت گرم ۱۸ عیار.
-   - نسبت طلا به نقره = اونس طلا / اونس نقره.
-   - کریدور تعادلی حباب طلای ۱۸ عیار = بازه [-2.5% تا +2.5%]. حباب بالای +2.5% (به‌ویژه > +4%) نشانه اشباع خرید و پتانسیل اصلاح در افق ۱۴ روزه است؛ حباب کمتر از -2.5% (به‌ویژه < -4%) نشانه عقب‌ماندگی و محرک تقاضای آربیتراژی در افق ۱۴ روزه است.
-۴. داده‌های زنده تابلوی بازار امروز جهت ارجاع دقیق:
+۱. ادبیات حرفه‌ای، روان و انسانی؛ پاسخ دقیقاً به همان چیزی که کاربر پرسیده است (Intent Adherence). سؤال ساده را به گزارش جامع تبدیل نکنید.
+۲. سد کامل ضدسیگنال: هرگز سیگنال قطعی خرید/فروش، نقطه ورود/خروج، تارگت قطعی یا تضمین سود صادر نکنید. به جای آن، شواهد، سناریوها و ریسک‌ها را تبیین کنید. متن استاندارد سلب مسئولیت را فقط در پرسش‌هایی که ممکن است با توصیه معاملاتی اشتباه شوند (خرید/فروش/ورود/خروج) به‌صورت یک‌بار و کوتاه ذکر کنید — نه در هر پاسخ.
+۳. ممنوعیت مطلق نشت فرمول و جزئیات داخلی در پاسخ کاربر:
+   - هیچ فرمول ریاضی، LaTeX، ضریب محاسباتی (مانند ضرایب تبدیل اونس/مثقال/عیار)، نام موتور یا کلاس، نام فایل، شماره نسخه، «گام‌های محاسبه»، «Pearson R» یا واژه‌های پیاده‌سازی را در پاسخ نیاورید — مگر کاربر صریحاً درباره نحوه محاسبه یا معماری بپرسد.
+   - به‌جای فرمول، نتیجه را در یک جمله طبیعی توضیح دهید (مثلاً «مظنه معادل هر مثقال طلای ۱۷ عیار حدود ... برآورد می‌شود»).
+۴. اعداد: فقط از «داده‌های زنده تابلوی بازار امروز» و شواهد فراهم‌شده در این پیام استفاده کنید.
+   - هرگز عددی را از پیام‌های قبلی گفت‌وگو (حافظه گفتگو) نقل نکنید؛ متن پاسخ قبلی منبع واقعیت بازار نیست.
+   - اگر داده لازم در دسترس نیست، عدد نسازید و صریح بگویید داده کافی نیست.
+   - هیچ پیش‌بینی عددی قطعی، تارگت، یا مقدار تاریخی از خود نسازید. برای افق‌های آینده فقط سناریوی شرطی («اگر الف و ب حفظ شود...») و در چارچوب شواهد ارائه دهید.
+۵. ساختار پاسخ بر اساس نوع سؤال:
+   - پرسش وضعیت دارایی: ابتدا قیمت فعلی، سپس تغییر روزانه (و هفتگی اگر موجود است)، سپس در صورت مرتبط بودن یک نکته ساختاری کوتاه. هیچ تحلیل نامرتبط (همبستگی کلی، سایر دارایی‌ها) اضافه نکنید.
+   - پرسش «چرا»: مشاهده → محرک‌های محتمل و مستند → قدرت شاهد → تفسیر اقتصادی → عدم‌قطعیت. اگر شاهد کافی نیست صریح بگویید: «از داده‌های فعلی نمی‌توان یک علت واحد و قطعی تعیین کرد.»
+   - پرسش سناریویی: نرخ مبنا → نرخ سناریویی → درصد تغییر → نتیجه روی دارایی هدف → تغییر مطلق → تفسیر → محدودیت سناریو (بدون فرمول).
+   - پرسش دارایی دیجیتال: ابتدا وضعیت فعلی (قیمت و تغییر)، سپس ساختار بازار و سناریوهای شرطی با ذکر ریسک؛ هرگز تارگت قطعی ندهید.
+۶. طول پاسخ مطابق سطح تعیین‌شده: ${responseLevel}
+   - SHORT: ۲ تا ۴ خط.
+   - STANDARD: یک پاسخ منسجم با ۲ تا ۴ بخش کوتاه.
+   - DEEP: تحلیل ساختاریافته با بخش‌های مشخص، اما بدون اطناب غیرضروری و فقط با شواهد مرتبط.
+${isWhy ? '۷. این پرسش از نوع «چرا» است: علت را فقط در صورت وجود شاهد مطرح کن و صریح تفکیک کن چه چیزی مشاهده است و چه چیزی استنباط محتمل.\n' : ''}${isTechnical ? '۷. کاربر صریحاً پرسش فنی/محاسباتی پرسیده است؛ در این حالت توضیح روش محاسبه و ضرایب مجاز است.\n' : ''}۸. داده‌های زنده تابلوی بازار امروز جهت ارجاع (فقط برای همین پاسخ):
 ${evSummary}
 ${analysisConstraint}
-پاسخ را در قالبی شیوا با تیترهای مشخص، ساختار تحلیلی و تبیین ریسک‌ها ارائه دهید.`;
+پاسخ را به زبان فارسی روان، بدون ذکر جزئیات پیاده‌سازی، ارائه دهید.`;
 }
 
 function buildSystemPrompt(mode) {
