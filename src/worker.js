@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3B (Working Memory & Multi-Turn Anaphora State Machine)';
+const WORKER_PHASE = 'Phase 2-3C (Evidence Integration, Conversational Response Quality & End-to-End QA)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -140,6 +140,7 @@ export default {
         knowledgeRetriever: 'ENABLED (Phase 2-1 Deterministic Core)',
         evidenceBuilder: 'ENABLED (Phase 2-2 Unified Evidence Contract v1.0)',
         workingMemory: 'ENABLED (Phase 2-3B Semantic Working Memory v1.0 — client-carried, stateless worker)',
+        responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
           active: ['LIVE', 'DERIVED', 'HYPOTHETICAL', 'KNOWLEDGE'],
           extensionPoints: ['HISTORICAL', 'EXTERNAL']
