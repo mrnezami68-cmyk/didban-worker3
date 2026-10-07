@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3F-B3 (Knowledge Routing, Intent Isolation & Presentation)';
+const WORKER_PHASE = 'Phase 2-3F-B3-KH (Knowledge Retrieval & Presentation Hardening)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -143,7 +143,8 @@ export default {
         scenarioBinding: 'ENABLED (Phase 2-3E-B Multi-Asset Scenario Binding & Intent Gate v1.0)',
         dataIntegrity: 'ENABLED (Phase 2-3F-B1 Crypto Evidence Normalization & pct24h->change24h Mapping v1.0)',
         temporalSafety: 'ENABLED (Phase 2-3F-B2 Historical No-LIVE-Substitution & Conversational Continuity v1.0)',
-        knowledgeRouting: 'ENABLED (Phase 2-3F-B3 Knowledge Presentation & Correlation Isolation v1.0)',
+        knowledgeRouting: 'ENABLED (Phase 2-3F-B3-KH Knowledge Retrieval & Presentation Hardening v1.1)',
+        knowledgeHardening: 'ENABLED (Phase 2-3F-B3-KH KH-01..KH-06 Canonical Relevance Policy & Boundary Safety v1.0)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
@@ -458,7 +459,13 @@ export default {
         }
 
         // ۳.۸. ارائه دانشنامه (Phase 2-3F-B3): شاخه اختصاصی KNOWLEDGE — بدون حدس و بدون داده بازار
-        if ((queryAnalysis.requiresKnowledge || queryAnalysis.intent.primary === 'KNOWLEDGE_QUERY' || queryAnalysis.knowledgeQuery) && !detectWhyQuery(userMsg)) {
+        // Phase 2-3F-B3-KH (KH-05): پرسش «چرا» مفهومی (موضوع معتبر + بدون حرکت بازار) به دانش‌نامه می‌رود؛
+        // «چرا X بالا/پایین رفت» همچنان تحلیل بازار (MARKET) می‌ماند.
+        const _conceptualWhy = detectConceptualWhyQuery(userMsg);
+        const _resolvedKnowledgeTopic = !!(queryAnalysis.knowledgeQuery && queryAnalysis.knowledgeQuery.topic
+          && queryAnalysis.knowledgeQuery.topic !== 'GENERAL_FINANCE');
+        const _whyAllowsKnowledge = !detectWhyQuery(userMsg) || (_conceptualWhy && _resolvedKnowledgeTopic);
+        if ((queryAnalysis.requiresKnowledge || queryAnalysis.intent.primary === 'KNOWLEDGE_QUERY' || queryAnalysis.knowledgeQuery) && _whyAllowsKnowledge) {
           const knowledgeReply = buildKnowledgePresentationResponse(retrievedKnowledge, queryAnalysis);
           if (knowledgeReply) {
             const knowledgeMatched = !!(retrievedKnowledge && retrievedKnowledge.meta && retrievedKnowledge.meta.matched);
@@ -745,8 +752,8 @@ const ASSET_TAXONOMY = {
 };
 
 const KNOWLEDGE_TOPICS = {
-  'P/E': ['p/e', 'pe', 'پی بر ای', 'پی ای', 'نسبت p/e', 'نسبت pe', 'قیمت به درآمد', 'نسبت قیمت به سود'],
-  'CPI': ['cpi', 'شاخص قیمت مصرف‌کننده', 'شاخص قیمت مصرف کننده', 'شاخص تورم مصرف‌کننده', 'تورم cpi'],
+  'P/E': ['p/e', 'pe', 'پی بر ای', 'پی ای', 'پی به ای', 'نسبت p/e', 'نسبت pe', 'قیمت به درآمد', 'نسبت قیمت به سود'],
+  'CPI': ['cpi', 'شاخص قیمت مصرف‌کننده', 'شاخص قیمت مصرف کننده', 'شاخص تورم مصرف‌کننده', 'شاخص تورم', 'تورم cpi'],
   'DXY': ['dxy', 'شاخص دلار آمریکا', 'شاخص دلار', 'دلار جهانی'],
   'PMI': ['pmi', 'شاخص مدیران خرید', 'مدیران خرید'],
   'GOLD_TO_SILVER': ['نسبت طلا به نقره', 'طلا به نقره', 'xau/xag', 'xau xag', 'نسبت اونس طلا به نقره'],
@@ -756,8 +763,9 @@ const KNOWLEDGE_TOPICS = {
   'BROKER_VS_BROKERAGE': ['تفاوت کارگزاری و بروکر', 'فرق کارگزاری و بروکر', 'کارگزاری یا بروکر', 'کارگزاری و بروکر'],
   'GOLD18_BUBBLE_CORRIDOR': ['حباب طلای ۱۸', 'حباب ۱۸ عیار', 'کریدور تعادلی طلا', 'دامنه تعادلی طلا', 'اشباع خرید طلا'],
   'QUARTER_COIN_BUBBLE': ['حباب ربع سکه', 'حباب ربع‌سکه', 'ربع سکه'],
-  'SIDEWAYS_MARKET': ['بازار ساید', 'روند ساید', 'حرکت ساید', 'سایدوی', 'بازار رنج', 'کانال رنج', 'رنج‌باند', 'درجا زدن', 'درجا زدن قیمت', 'ساید یعنی', 'رنج یعنی', 'ساید چیست', 'بازار رنج چیست'],
-  'PRICE_CONSOLIDATION': ['تثبیت قیمت', 'تثبیت در محدوده', 'تثبیت نرخ', 'فاز تثبیت', 'کنسولیدیشن', 'consolidation']
+  'SIDEWAYS_MARKET': ['بازار ساید', 'روند ساید', 'حرکت ساید', 'سایدوی', 'بازار رنج', 'کانال رنج', 'رنج‌باند', 'درجا زدن', 'درجا زدن قیمت', 'ساید یعنی', 'رنج یعنی', 'ساید چیست', 'بازار رنج چیست', 'بازار خنثی', 'فلت'],
+  'PRICE_CONSOLIDATION': ['تثبیت قیمت', 'تثبیت در محدوده', 'تثبیت نرخ', 'فاز تثبیت', 'کنسولیدیشن', 'کانسولیدیشن', 'consolidation'],
+  'CEX_DEX': ['cex و dex', 'تفاوت cex و dex', 'cex', 'dex', 'صرافی متمرکز', 'صرافی غیرمتمرکز', 'صرافی متمرکز و غیرمتمرکز']
 };
 
 // Phase 2-3F-B3: تطبیق مرزدار مترادف‌های لاتین (ضد نشت زیررشته‌ای مانند 'sol' در 'consolidation')
@@ -765,9 +773,24 @@ function entitySynonymHit(text, syn) {
   const s = String(text || '');
   const needle = String(syn || '').toLowerCase();
   if (!needle) return false;
-  if (!/^[a-z0-9.]+$/.test(needle)) return s.includes(needle);
-  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp('(^|[^a-z0-9])' + esc + '($|[^a-z0-9])', 'i').test(s);
+  if (/^[a-z0-9.]+$/.test(needle)) {
+    const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(^|[^a-z0-9])' + esc + '($|[^a-z0-9])', 'i').test(s);
+  }
+  // Phase 2-3F-B3-KH (KH-06): مترادف‌های کوتاه فارسی (≤ ۳ نویسه) فقط با مرز واژه معتبرند
+  // (رفع نشت «انس» در «انسان/کانسولیدیشن» و «سول» در «کانسولیدیشن»)
+  if (needle.length <= 3) {
+    const isWordChar = (ch) => /[\p{L}\p{N}\p{M}]/u.test(ch);
+    let idx = s.indexOf(needle);
+    while (idx !== -1) {
+      const before = idx === 0 ? ' ' : s[idx - 1];
+      const after = idx + needle.length >= s.length ? ' ' : s[idx + needle.length];
+      if (!isWordChar(before) && !isWordChar(after)) return true;
+      idx = s.indexOf(needle, idx + 1);
+    }
+    return false;
+  }
+  return s.includes(needle);
 }
 
 function extractEntities(text) {
@@ -794,7 +817,7 @@ function detectKnowledgeTopic(text) {
   const s = String(text).toLowerCase();
   for (const [topic, kws] of Object.entries(KNOWLEDGE_TOPICS)) {
     for (const kw of kws) {
-      if (s.includes(kw)) {
+      if (entitySynonymHit(s, kw)) {
         return { topic, keywords: kws, matched: kw };
       }
     }
@@ -1230,7 +1253,7 @@ const MakanIdentityProfile = (() => {
 })();
 
 const ResponsePresentation = (() => {
-  const RP_VERSION = '1.1';
+  const RP_VERSION = '1.2';
 
   const RP_LEVELS = {
     SHORT: 'SHORT',
@@ -1404,6 +1427,16 @@ const ResponsePresentation = (() => {
   const detectTechnicalRequest = (rawText) => TECHNICAL_REQUEST_PATTERNS.test(normalizeText(rawText));
 
   const detectWhyQuery = (rawText) => /(^|\s)(چرا|به\s*چه\s*دلیل|چگونه\s*است\s*که|علت\s*چیست|دلیل\s*چیست)/.test(normalizeText(rawText));
+
+  // Phase 2-3F-B3-KH (KH-05): تفکیک «چرای مفهومی» (مسیر دانش) از «چرای حرکتی دارایی» (تحلیل بازار)
+  const WHY_CONCEPTUAL_PATTERN = /(مهم\s*(است|هست|هستند)|اهمیت|ضروری|لازم\s+است|چرا\s+باید|چه\s+اهمیتی|چه\s+مفهومی|مفهومی\s+دارد|چه\s+معنایی)/;
+  const WHY_MARKET_MOVEMENT_PATTERN = /(بالا|پایین|افت|ریزش|رشد|جهش|صعود|نزول|ثابت|تغییر|رالی|اصلاح|حرکت|تپش|قیمت|چقدر|چنده|امروز|دیروز|هفته)/;
+  const detectConceptualWhyQuery = (rawText) => {
+    const t = normalizeText(rawText);
+    if (!WHY_CONCEPTUAL_PATTERN.test(t)) return false;
+    return !WHY_MARKET_MOVEMENT_PATTERN.test(t);
+  };
+
 
   /* ==========================================================================
      ۵) پاک‌سازی پاسخ کاربرنما از نشت فرمول/موتور (Presentation Sanitizer)
@@ -1685,6 +1718,7 @@ const ResponsePresentation = (() => {
     'GOLD_ETF': 'صندوق‌های طلای بورسی',
     'COIN_VS_TOKEN': 'تفاوت کوین و توکن',
     'BROKER_VS_BROKERAGE': 'تفاوت کارگزاری و بروکر',
+    'CEX_DEX': 'صرافی متمرکز در برابر غیرمتمرکز (CEX/DEX)',
     'GOLD18_BUBBLE_CORRIDOR': 'کریدور تعادلی طلای ۱۸ عیار',
     'QUARTER_COIN_BUBBLE': 'حباب ربع سکه',
     'SIDEWAYS_MARKET': 'بازار ساید/رنج',
@@ -1693,34 +1727,60 @@ const ResponsePresentation = (() => {
     'GENERAL_FINANCE': 'مفاهیم عمومی مالی'
   };
 
-  const KNOWLEDGE_PRESENT_MIN_SCORE = 0.70;
-
   // Phase 2-3F-B3: بررسی قطعی موجودبودن مقدار زنده (پایه مشترک توابع جدید؛ جایگزین تکرار شرط گارد)
   const hasLiveValue = (item) =>
     Boolean(item) && item.value !== null && item.value !== undefined && item.value !== '' && Number.isFinite(Number(item.value));
 
+  // Phase 2-3F-B3-KH (KH-03): سیاست کانونیکال ارتباط دانش — یک منبع حقیقت واحد برای بازیاب و ارائه
+  const KNOWLEDGE_PRESENTATION_POLICY = {
+    retrievalMinimum: 0.40,
+    presentationMinimum: 0.40,
+    strongMatch: 0.65
+  };
+
+  const knowledgePresentationMinimum = (retrievedKnowledge) => {
+    const p = (retrievedKnowledge && retrievedKnowledge.policy) ? retrievedKnowledge.policy : null;
+    const v = (p && typeof p.presentationMinimum === 'number') ? p.presentationMinimum : KNOWLEDGE_PRESENTATION_POLICY.presentationMinimum;
+    return v;
+  };
+
+  // Phase 2-3F-B3-KH (KH-04): حذف قطعه‌ای مارک‌آپ فرمول (بلوک/دستور) — هرگز حذف کل خط یا پاراگراف دانش
+  const stripKnowledgeMathMarkup = (text) => {
+    let out = String(text || '');
+    out = out.replace(/\$\$[\s\S]*?\$\$/g, ' ');            // بلوک‌های $$...$$
+    out = out.replace(/\\[a-zA-Z]+(?:\s*\{[^{}]*\})*/g, ' '); // دستورهای LaTeX و آرگومان‌ها
+    out = out.replace(/[{}]/g, ' ');                             // آکولادهای یتیم
+  out = out.replace(/\$([^$\n]{1,120})\$/g, '$1');           // ریاضی درون‌خطی: حذف فقط جداکنندهٔ $
+    out = out.replace(/\$\$/g, ' ');                            // $$ نامتوازن باقی‌مانده
+    out = out.replace(/[ \t]{2,}/g, ' ');
+    return out.trim();
+  };
 
   const trimKnowledgeContent = (content) => {
-    const raw = String(content || '');
+    const raw = stripKnowledgeMathMarkup(content);
     if (!raw) return '';
-    const lines = raw.split('\n')
-      .map(l => l.trim())
-      .filter(l => l && !l.includes('$$') && !l.includes('\\frac') && !l.includes('\\text') && !l.includes('\\quad'));
+    const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     let out = lines.join('\n');
-    if (out.length > 900) {
-      out = out.slice(0, 900);
+    if (out.length > 1400) {
+      out = out.slice(0, 1400);
       const cut = out.lastIndexOf('\n');
-      if (cut > 300) out = out.slice(0, cut);
+      if (cut > 400) out = out.slice(0, cut);
       out = out.trim() + ' …';
     }
     return out;
+  };
+
+  const isKnowledgePresentationEligible = (retrievedKnowledge) => {
+    const results = (retrievedKnowledge && Array.isArray(retrievedKnowledge.results)) ? retrievedKnowledge.results : [];
+    const min = knowledgePresentationMinimum(retrievedKnowledge);
+    return results.some(r => Number(r.relevanceScore) >= min);
   };
 
   const buildKnowledgePresentationResponse = (retrievedKnowledge, cir = {}) => {
     const results = (retrievedKnowledge && Array.isArray(retrievedKnowledge.results)) ? retrievedKnowledge.results : [];
     const topic = (retrievedKnowledge && retrievedKnowledge.query && retrievedKnowledge.query.topic) || null;
     const topicFa = KNOWLEDGE_TOPIC_LABELS[topic] || 'این مفهوم';
-    const best = results.find(r => Number(r.relevanceScore) >= KNOWLEDGE_PRESENT_MIN_SCORE) || null;
+    const best = results.find(r => Number(r.relevanceScore) >= knowledgePresentationMinimum(retrievedKnowledge)) || null;
     if (!best) {
       return `📚 **دانشنامه دیدبان — مدخلی برای «${topicFa}» یافت نشد.**\n\n` +
         `این پرسش یک استعلام مفهومی است؛ در دانشنامه داخلی مدخل متناظری برای آن در دسترس نیست و عمداً هیچ توضیح ساختگی تولید نمی‌شود.\n\n` +
@@ -1800,6 +1860,10 @@ const ResponsePresentation = (() => {
     buildAssetSnapshotResponse,
     buildScopeFallbackResponse,
     trimKnowledgeContent,
+    stripKnowledgeMathMarkup,
+    isKnowledgePresentationEligible,
+    KNOWLEDGE_PRESENTATION_POLICY,
+    detectConceptualWhyQuery,
     assetUnit,
     KNOWLEDGE_TOPIC_LABELS,
     RP_VERSION,
@@ -1868,6 +1932,8 @@ function buildHistoricalEvidenceResponse(cir = {}, historicalItems = []) {
 }
 const buildConciseMarketStatusResponse = ResponsePresentation.buildConciseMarketStatusResponse;
 const buildKnowledgePresentationResponse = ResponsePresentation.buildKnowledgePresentationResponse;
+// Phase 2-3F-B3-KH (KH-05): مسیر پرسش «چرا» مفهومی در سطح اسکریپت ورکر
+const detectConceptualWhyQuery = ResponsePresentation.detectConceptualWhyQuery;
 const buildComparisonResponse = ResponsePresentation.buildComparisonResponse;
 const buildAssetSnapshotResponse = ResponsePresentation.buildAssetSnapshotResponse;
 const buildScopeFallbackResponse = ResponsePresentation.buildScopeFallbackResponse;
@@ -3067,6 +3133,7 @@ const TOPIC_TO_ID_MAP = {
   'GOLD_ETF': ['gold_etf_vs_physical', 'gold_commodity_funds_etf', 'gold_etf'],
   'COIN_VS_TOKEN': ['coin_vs_token', 'crypto_coin_vs_token'],
   'BROKER_VS_BROKERAGE': ['broker_vs_brokerage', 'broker_vs_brokerage_diff'],
+  'CEX_DEX': ['crypto_exchange_types'],
   'GOLD18_BUBBLE_CORRIDOR': ['gold18_bubble_regimes', 'gold18_bubble'],
   'QUARTER_COIN_BUBBLE': ['coin_quarter_bubble', 'quarter_coin_bubble'],
   'COIN_BUBBLE': ['coin_bubble_calc', 'coin_bubble'],
@@ -3087,33 +3154,132 @@ const TOPIC_TO_ID_MAP = {
   'PRICE_CONSOLIDATION': ['price_consolidation_regimes', 'price_consolidation']
 };
 
-// Phase 2-3F-B3: تطبیق کلیدواژه مرزدار (حداقل طول ۴) به‌جای زیررشته آزاد
+// ============================================================================
+// Phase 2-3F-B3-KH — سیاست کانونیکال ارتباط دانش، نرمال‌سازی و مرز واژه
+// ============================================================================
+
+// KH-03: سیاست کانونیکال ارتباط (منبع حقیقت واحد برای بازیاب و ارائه)
+const KNOWLEDGE_RELEVANCE_POLICY = {
+  retrievalMinimum: 0.40,
+  presentationMinimum: 0.40,
+  strongMatch: 0.65,
+  aliasMatchBonus: 0.05,
+  phraseMatchBonus: 0.10
+};
+
+// KH-02: توقف‌واژه‌های پرسشی (قطعی و محدود — بدون NLP سنگین)
+const KNOWLEDGE_QUERY_STOPWORDS = ['چیست', 'چیه', 'یعنی', 'چه', 'چیزی', 'را', 'کن', 'کنید', 'بکن', 'بگو', 'بده', 'بدهید', 'توضیح', 'ده', 'دهید', 'میان', 'بین', 'دارد', 'دارند', 'کار', 'کند', 'کنه', 'است', 'هست', 'هستند', 'مهم', 'لطفا', 'درباره', 'مفهوم', 'تعریف', 'فرمول', 'از', 'به', 'در', 'با', 'برای', 'این', 'آن', 'که', 'های', 'ها', 'و', 'یا'];
+
+// KH-02/KH-11: نگاشت نام‌های مستعار کانونیکال ──► عبارت‌های قابل انطباق
+const KNOWLEDGE_QUERY_ALIASES = {
+  'پی به ای': ['پی بر ای', 'p/e'],
+  'شاخص تورم': ['cpi'],
+  'بازار خنثی': ['بازار ساید'],
+  'فلت': ['بازار ساید'],
+  'کانسولیدیشن': ['کنسولیدیشن', 'consolidation'],
+  'اونس جهانی': ['اونس', 'اونس تروی'],
+  'انس طلا': ['اونس طلا'],
+  'troy ounce': ['اونس تروی'],
+  'صرافی متمرکز': ['cex'],
+  'صرافی غیرمتمرکز': ['dex'],
+  'dominance': ['دامیننس'],
+  'btc dominance': ['دامیننس'],
+  'دامیننس': ['btc dominance']
+};
+
+const KNOWLEDGE_QUESTION_MARKER = /(چیست|چیه|یعنی|تفاوت|فرق|چگونه|چه\s+چیزی|چه\s+اهمیتی)/;
+
+// KH-01: نرمال‌سازی جست‌وجو (نشانه‌های فارسی/عربی/لاتین + نیم‌فاصله؛ بدون تغییر معنا)
+function normalizeKnowledgeSearchText(rawText) {
+  return String(rawText || '')
+    .toLowerCase()
+    .replace(/[؟?،,؛;:.!()[\]{}«»"']/g, ' ')
+    .replace(/\u200c/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// KH-02: استخراج قطعی عبارات/توکن‌های جست‌وجو از پرسش زبان طبیعی
+function deriveKnowledgeSearchTerms(rawText) {
+  const original = normalizeKnowledgeSearchText(rawText);
+  if (!original) return [];
+  const cleaned = original
+    .replace(/(چه\s+چیزی\s+را\s+نشان\s+می\s?دهد|چه\s+تفاوتی\s+(?:دارند|دارد)|چگونه\s+کار\s+می\s?کند|چه\s+اهمیتی\s+دارد|یعنی\s+چه|را\s+توضیح\s+بده(?:ید)?|مهم\s+(?:است|هست)|چیست|چیه)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const terms = [];
+  const push = (v) => { const vv = String(v || '').trim(); if (vv && !terms.includes(vv)) terms.push(vv); };
+  if (cleaned) push(cleaned);
+  cleaned.split(' ').filter((w) => w.length >= 3 && !KNOWLEDGE_QUERY_STOPWORDS.includes(w)).forEach(push);
+  return terms.slice(0, 8);
+}
+
+// KH-02: بسط کلیدواژه‌های پرسش (توکن‌ها + نام‌های مستعار) به‌همراه عبارت اصلی
+function expandQueryKeywords(keywords) {
+  // KH-02/KH-03: تفکیک «عبارت» (وزن کامل) از «توکن تکی» (پاداش محدود) تا توکن‌های عمومی
+  // مانند «کوین» یا «طلا» به‌تنهایی موجب تطبیق کاذب نشوند؛ نام‌های مستعار مصوب با وزن کامل.
+  const plain = [];
+  const alias = [];
+  const tokens = [];
+  let primaryPhrase = '';
+  const push = (arr, v) => { const vv = String(v || '').trim(); if (vv && !arr.includes(vv)) arr.push(vv); };
+  for (const k of (Array.isArray(keywords) ? keywords : [])) {
+    const kk = String(k || '').trim();
+    if (!kk) continue;
+    push(plain, kk);
+    const nk = normalizeKnowledgeSearchText(kk);
+    if (nk && nk !== kk) push(plain, nk);
+    if (nk && (nk.includes(' ') || nk.length > 24) && KNOWLEDGE_QUESTION_MARKER.test(nk)) {
+      const derived = deriveKnowledgeSearchTerms(nk);
+      const phrase = derived.find((t) => t.includes(' ')) || '';
+      if (phrase) { push(plain, phrase); if (!primaryPhrase) primaryPhrase = phrase; }
+      derived.filter((t) => !t.includes(' ')).forEach((t) => push(tokens, t));
+    }
+    const derivedForAlias = (nk && (nk.includes(' ') || nk.length > 24) && KNOWLEDGE_QUESTION_MARKER.test(nk))
+      ? deriveKnowledgeSearchTerms(nk) : [];
+    [nk].concat(derivedForAlias).forEach((cand) => {
+      const aliasVals = KNOWLEDGE_QUERY_ALIASES[cand];
+      if (aliasVals) aliasVals.forEach((t) => push(alias, t));
+    });
+  }
+  alias.forEach((t) => push(plain, t));
+  return { keywords: plain.slice(0, 16), aliasKeywords: alias.slice(0, 8), tokenKeywords: tokens.slice(0, 8), primaryPhrase };
+}
+
+// KH-01: تطبیق مرزدار یونیکد-آگاه (فارسی/عربی/لاتین) با حداقل طول ۳
+const KW_BOUNDARY_CHAR = /[^\p{L}\p{N}\p{M}]/u;
 function kwHit(a, b) {
   if (!a || !b) return false;
   if (a === b) return true;
   const short = a.length <= b.length ? a : b;
   const long = a.length <= b.length ? b : a;
-  if (short.length < 4) return false;
-  const idx = long.indexOf(short);
-  if (idx === -1) return false;
-  const before = idx === 0 ? ' ' : long[idx - 1];
-  const after = idx + short.length >= long.length ? ' ' : long[idx + short.length];
-  const boundary = /[\s،,؛;:.!?()«»"'\/\-]/;
-  return boundary.test(before) && boundary.test(after);
+  if (short.length < 3) return false;
+  let idx = long.indexOf(short);
+  while (idx !== -1) {
+    const before = idx === 0 ? ' ' : long[idx - 1];
+    const after = idx + short.length >= long.length ? ' ' : long[idx + short.length];
+    if (KW_BOUNDARY_CHAR.test(before) && KW_BOUNDARY_CHAR.test(after)) return true;
+    idx = long.indexOf(short, idx + 1);
+  }
+  return false;
 }
 
-// Phase 2-3F-B3: خلاصه‌سازی قطعی محتوای دانشنامه برای ارائه (حذف فرمول‌ها)
+// KH-04: حذف قطعه‌ای مارک‌آپ فرمول — هرگز حذف کل خط/پاراگراف دانش
 function trimKnowledgeRowContent(content) {
-  const raw = String(content || '');
+  const raw = String(content || '')
+    .replace(/\$\$[\s\S]*?\$\$/g, ' ')
+    .replace(/\\[a-zA-Z]+(?:\s*\{[^{}]*\})*/g, ' ')
+    .replace(/[{}]/g, ' ')
+    .replace(/\$\$/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
   if (!raw) return '';
-  const lines = raw.split('\n')
-    .map(l => l.trim())
-    .filter(l => l && !l.includes('$$') && !l.includes('\\frac') && !l.includes('\\text') && !l.includes('\\quad'));
+  const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   let out = lines.join('\n');
-  if (out.length > 900) {
-    out = out.slice(0, 900);
+  if (out.length > 1400) {
+    out = out.slice(0, 1400);
     const cut = out.lastIndexOf('\n');
-    if (cut > 300) out = out.slice(0, cut);
+    if (cut > 400) out = out.slice(0, cut);
     out = out.trim() + ' …';
   }
   return out;
@@ -3127,7 +3293,9 @@ function scoreKnowledgeItem(item, query = {}) {
 
   const itemId = String(item.id || '').toLowerCase();
   const itemTitle = String(item.title || '').toLowerCase();
+  const itemTitleNorm = itemTitle.replace(/\u200c/g, ' ').replace(/\s+/g, ' ').trim();
   const itemSummary = String(item.summary || '').toLowerCase();
+  const itemSummaryNorm = itemSummary.replace(/\u200c/g, ' ').replace(/\s+/g, ' ').trim();
   const itemCategory = String(item.category || '').toLowerCase();
   const itemKeywords = Array.isArray(item.keywords)
     ? item.keywords.map(k => String(k).toLowerCase())
@@ -3138,6 +3306,13 @@ function scoreKnowledgeItem(item, query = {}) {
   const queryKeywords = Array.isArray(query.keywords)
     ? query.keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean)
     : [];
+  const queryAliasKeywords = Array.isArray(query.aliasKeywords)
+    ? query.aliasKeywords.map(k => String(k).toLowerCase().trim()).filter(Boolean)
+    : [];
+  const queryTokenKeywords = Array.isArray(query.tokenKeywords)
+    ? query.tokenKeywords.map(k => String(k).toLowerCase().trim()).filter(Boolean)
+    : [];
+  const queryPhrase = String(query.phrase || '').toLowerCase().trim();
 
   if (queryTopic) {
     const topicLower = queryTopic.toLowerCase();
@@ -3148,40 +3323,74 @@ function scoreKnowledgeItem(item, query = {}) {
     }
   }
 
-  let keywordMatched = false;
-  for (const kw of queryKeywords) {
-    if (itemKeywords.some(ik => kwHit(ik, kw))) {
-      keywordMatched = true;
-      break;
-    }
+// KH-02/KH-03: تطبیق جهت‌دار — شکل کوئری (پس از حذف واژگان پرسشی) باید داخل کلیدواژه/عنوان/خلاصه مدخل باشد؛
+// هرگز نباید کلیدواژه کوتاه مدخل، داخل جمله بلند کاربر جست‌وجو شود (رفع تطبیق کاذب «کوین چیست» در «استیبل کوین چیست»).
+const queryMatchForms = (kw) => {
+  const raw = String(kw || '').trim();
+  const nk = normalizeKnowledgeSearchText(raw);
+  const forms = [raw, nk];
+  if (nk && KNOWLEDGE_QUESTION_MARKER.test(nk)) {
+    const head = deriveKnowledgeSearchTerms(nk)[0];
+    if (head) forms.push(head);
   }
+  return Array.from(new Set(forms.filter(Boolean)));
+};
+const queryHitsField = (field, kw) => {
+  if (!field || !kw) return false;
+  const f = String(field);
+  return queryMatchForms(kw).some((form) => {
+    if (form === f) return true;
+    if (form.length < 3 || !f.includes(form)) return false;
+    return kwHit(f, form);
+  });
+};
+const anyQueryKeywordHits = (field, list) => (list || []).some((kw) => queryHitsField(field, kw));
+
+  const keywordMatched = anyQueryKeywordHits(itemKeywords, queryKeywords);
   if (keywordMatched) {
     score += 0.40;
     reasons.push('EXACT_KEYWORD');
   }
 
-  let titleMatched = false;
-  for (const kw of queryKeywords) {
-    if (itemTitle.includes(kw)) {
-      titleMatched = true;
-      break;
-    }
-  }
+  const titleMatched = anyQueryKeywordHits(itemTitleNorm, queryKeywords);
   if (titleMatched) {
     score += 0.25;
     reasons.push('TITLE_MATCH');
   }
 
-  let summaryMatched = false;
-  for (const kw of queryKeywords) {
-    if (itemSummary.includes(kw)) {
-      summaryMatched = true;
-      break;
-    }
-  }
+  const summaryMatched = anyQueryKeywordHits(itemSummaryNorm, queryKeywords);
   if (summaryMatched && !titleMatched) {
     score += 0.15;
     reasons.push('SUMMARY_MATCH');
+  }
+
+  // KH-03: تطابق عبارت اصلی پرسش (سیگنال دقیق‌تر از توکن تکی)
+  if (queryPhrase) {
+    const phraseInKeywords = queryHitsField(itemKeywords, queryPhrase);
+    const phraseInTitle = itemTitleNorm.includes(queryPhrase);
+    const phraseInSummary = itemSummaryNorm.includes(queryPhrase);
+    if (phraseInKeywords || phraseInTitle || phraseInSummary) {
+      score += KNOWLEDGE_RELEVANCE_POLICY.phraseMatchBonus;
+      reasons.push('PHRASE_MATCH');
+    }
+  }
+
+  // KH-02: توکن‌های زبان طبیعی مشتق‌شده فقط سیگنال تقویتی‌اند (هرگز به‌تنهایی موجب تطبیق نمی‌شوند)
+  if (queryTokenKeywords.length > 0) {
+    const tokenMatched = anyQueryKeywordHits(itemKeywords, queryTokenKeywords);
+    if (tokenMatched) {
+      score += 0.10;
+      reasons.push('NL_TOKEN_MATCH');
+    }
+  }
+
+  // KH-11: تطابق نام مستعار کانونیکال (سیگنال تقویتی محدود)
+  if (queryAliasKeywords.length > 0) {
+    const aliasMatched = anyQueryKeywordHits(itemKeywords, queryAliasKeywords);
+    if (aliasMatched) {
+      score += KNOWLEDGE_RELEVANCE_POLICY.aliasMatchBonus;
+      reasons.push('ALIAS_MATCH');
+    }
   }
 
   if (queryCategory && itemCategory === queryCategory) {
@@ -3200,7 +3409,8 @@ function scoreKnowledgeItem(item, query = {}) {
 
 async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
   const maxResults = typeof options.maxResults === 'number' ? options.maxResults : 2;
-  const minScore = typeof options.minScore === 'number' ? options.minScore : 0.40;
+  // KH-03: حداقل امتیاز از سیاست کانونیکال (بدون عدد پراکنده)
+  const minScore = typeof options.minScore === 'number' ? options.minScore : KNOWLEDGE_RELEVANCE_POLICY.retrievalMinimum;
 
   const baseResult = {
     query: {
@@ -3242,8 +3452,19 @@ async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
 
     const scoredItems = [];
 
+    // KH-02: بسط قطعی کلیدواژه‌های پرسش (توکن/عبارت/نام مستعار) پیش از امتیازدهی
+    const expanded = expandQueryKeywords(knowledgeQuery.keywords);
+    const effectiveQuery = {
+      topic: knowledgeQuery.topic,
+      category: knowledgeQuery.category,
+      keywords: expanded.keywords,
+      aliasKeywords: expanded.aliasKeywords,
+      phrase: expanded.primaryPhrase
+    };
+    baseResult.query.effectiveKeywords = expanded.keywords.slice();
+
     for (const item of rawItems) {
-      const { score, reasons } = scoreKnowledgeItem(item, knowledgeQuery);
+      const { score, reasons } = scoreKnowledgeItem(item, effectiveQuery);
       if (score >= minScore && reasons.length > 0) {
         scoredItems.push({
           id: item.id,
@@ -3252,7 +3473,8 @@ async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
           summary: item.summary,
           content: trimKnowledgeRowContent(item.content),
           relevanceScore: score,
-          matchReasons: reasons
+          matchReasons: reasons,
+          presentationEligible: score >= KNOWLEDGE_RELEVANCE_POLICY.presentationMinimum
         });
       }
     }
@@ -3268,9 +3490,11 @@ async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
 
     return {
       query: baseResult.query,
+      policy: { ...KNOWLEDGE_RELEVANCE_POLICY },
       results: cappedResults,
       meta: {
         matched: cappedResults.length > 0,
+        presentationEligible: cappedResults.length > 0 && cappedResults.every(r => r.presentationEligible === true),
         count: cappedResults.length,
         source: 'D1_KNOWLEDGE_DB'
       }
