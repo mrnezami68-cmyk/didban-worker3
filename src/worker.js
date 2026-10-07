@@ -388,7 +388,7 @@ export default {
         const needsHistorical = !!(tfCtx && tfCtx.requiresHistoricalData);
         const needsForecast = !!(tfCtx && tfCtx.requiresForecastCapability);
         const isConditionalScenarioRequest = (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON');
-        if (((needsHistorical && missingCaps.includes('HISTORICAL_DATA')) || needsForecast) && !isConditionalScenarioRequest) {
+        if ((needsHistorical || needsForecast) && !isConditionalScenarioRequest) {
           const degradedReply = buildDegradedTimeframeResponse(queryAnalysis);
           if (degradedReply) {
             return new Response(JSON.stringify({
@@ -407,7 +407,7 @@ export default {
         // ۳.۷. پاسخ کوتاه و متناسب وضعیت بازار (MARKET_STATUS) — بدون گزارش‌های نامرتبط
         if (queryAnalysis.intent.primary === 'MARKET_STATUS' &&
             Array.isArray(queryAnalysis.entities) && queryAnalysis.entities.length >= 1 && queryAnalysis.entities.length <= 2 &&
-            !queryAnalysis.requiresKnowledge) {
+            !queryAnalysis.requiresKnowledge && !detectWhyQuery(userMsg)) {
           const liveForStatus = (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.live))
             ? unifiedEvidenceContract.evidence.live
             : [];
@@ -426,7 +426,19 @@ export default {
 
         // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی
         if (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON') {
-          const whatIfAst = parseWhatIfQuery(userMsg, history);
+          let whatIfAst = parseWhatIfQuery(userMsg, history);
+          // Phase 2-3C: پیگیری سناریویی بدون دارایی/جهت صریح — بازسازی پرسش مؤثر از سناریوی حل‌شده حافظه کاری
+          if (!whatIfAst) {
+            const scResolved = (queryAnalysis.context && queryAnalysis.context.scenario) ? queryAnalysis.context.scenario : null;
+            if (scResolved && scResolved.asset && scResolved.mode === 'PERCENT_CHANGE' &&
+                scResolved.value !== null && scResolved.value !== undefined && Number.isFinite(Number(scResolved.value))) {
+              const entResolved = Array.isArray(queryAnalysis.entities) ? queryAnalysis.entities.find(e => e && e.value === scResolved.asset) : null;
+              const faLabel = (entResolved && entResolved.raw) ? entResolved.raw : ResponsePresentation.assetLabel(scResolved.asset);
+              const dirFa = scResolved.direction === 'DOWN' ? 'پایین' : 'بالا';
+              const effectiveWhatIfQuery = 'اگر ' + faLabel + ' ' + ResponsePresentation.toFaDigits(String(scResolved.value)) + '٪ ' + dirFa + ' بره';
+              whatIfAst = parseWhatIfQuery(effectiveWhatIfQuery, history);
+            }
+          }
           if (whatIfAst) {
             let whatIfReply = '';
             if (whatIfAst.type === 'MULTI_SCENARIO_COMPARISON') {
@@ -522,7 +534,8 @@ export default {
 
         // ۶. در صورت عدم وجود LLM یا بروز خطا: اجرای موتور قدرتمند استنتاج پویای دترمینیستیک
         if (!replyText) {
-          replyText = buildDynamicAdvisorResponse(userMsg, todayEvidence, normalizedEvidence, queryAnalysis);
+          replyText = buildDynamicAdvisorResponse(userMsg, todayEvidence, normalizedEvidence, queryAnalysis,
+            (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.live)) ? unifiedEvidenceContract.evidence.live : []);
           sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
         }
 
@@ -1162,9 +1175,11 @@ const ResponsePresentation = (() => {
     /\(?\s*canonical\s+factor\s*\)?/gi,
     /\(?\s*internal\s+engine\s*\)?/gi,
     /\(?\s*debug\s+trace\s*\)?/gi,
-    /گام(?:‌|\s)*های\s*محاسبات\s*دقیق\s*کانونیکال/g,
-    /محاسبه(?:‌|\s)*ی\s*دقیق\s*کانونیکال/g,
-    /محاسبات\s*دقیق\s*کانونیکال/g,
+    /گام(?:‌|\s)*های\s*محاسب(?:ه|ات)\s*دقیق\s*کانونیکال/g,
+    /محاسب(?:ه|ات)(?:‌|\s)*ی?\s*دقیق\s*کانونیکال/g,
+    /محاسبه\s*دقیق\s*کانونیکال/g,
+    /(?:ضرایب|ضریب|نسبت(?:‌|\s)*های)?\s*همبستگی\s*پیرسون(?:\s*تاریخی)?/g,
+    /پیرسون/g,
     /ضریب\s*(?:۴[٫.]۳۳۱۸|4\.3318)\s*کانونیکال/g,
     /فرمول\s*کانونیکال/g,
     /نسبت(?:‌|\s)*های\s*همبستگی\s*پیرسون(?:\s*تاریخی)?/g
@@ -1208,7 +1223,7 @@ const ResponsePresentation = (() => {
         let l = line
           .replace(/[ \t]{2,}/g, ' ')
           .replace(/\s+([،؛.!؟?])/g, '$1')
-          .replace(/\(\s*\)/g, '')
+          .replace(/\(\s*[:؛،.]?\s*\)/g, '')
           .replace(/\[\s*\]/g, '')
           .replace(/[ \t]+$/g, '');
         const stripped = l.replace(/[#*•\-–—:؛,.،()\sٔ﷼٬۰-۹0-9٪%+=]/g, '');
@@ -1246,14 +1261,14 @@ const ResponsePresentation = (() => {
         `به همین دلیل، وضعیت «${label}» را با قیمت لحظه‌ای جایگزین نمی‌کنم؛ چون این دو یکی نیستند و می‌تواند گمراه‌کننده باشد.\n\n` +
         `اگر مایل باشید می‌توانم:\n` +
         `• وضعیت لحظه‌ای ${assets} را ارائه کنم (با ذکر صریح اینکه داده لحظه‌ای است، نه تاریخی)\n` +
-        `• یا یک سناریوی فرضی (مثلاً «اگر ۵٪ تغییر کند...») را بررسی کنم.`;
+        `• یا یک سناریوی فرضی (مثلاً «اگر درصد مشخصی تغییر کند...») را بررسی کنم.`;
     }
 
     if (tf.horizon === 'FORECAST') {
       return `🔮 **پیش‌بینی عددی ارائه نمی‌شود:**\n\n` +
         `برای «${label}»، این سامانه پیش‌بینی قطعی یا هدف قیمتی اعلام نمی‌کند؛ زیرا موتور پیش‌بینی در دسترس نیست و هیچ عددی را به‌عنوان آینده جعل نمی‌کنم.\n\n` +
         `در عوض می‌توانم:\n` +
-        `• سناریوهای شرطی را بررسی کنم (مثلاً «اگر ${assets} ۵٪ تغییر کند، اثر محاسباتی آن چه می‌شود؟»)\n` +
+        `• سناریوهای شرطی را بررسی کنم (مثلاً «اگر ${assets} درصد مشخصی تغییر کند، اثر محاسباتی آن چه می‌شود؟»)\n` +
         `• وضعیت فعلی، تغییرات اخیر و ساختار بازار را ارائه کنم.`;
     }
 
@@ -1311,7 +1326,53 @@ const ResponsePresentation = (() => {
     return head + lines.join('\n') + tail;
   };
 
+  /* ==========================================================================
+     ۷) پاسخ قطعی «چرا» (WHY) در نبود مسیر مدل زبانی — ساختار §14/§15:
+        مشاهده → محرک‌های محتمل (فقط مرتبط) → قدرت شاهد → تفسیر اقتصادی → عدم‌قطعیت
+        • هیچ علت قطعی بدون شاهد ادعا نمی‌شود؛ اعداد فقط از شواهد زنده می‌آیند.
+     ========================================================================== */
+
+  const buildWhyResponse = (cir = {}, liveItems = []) => {
+    const entities = (cir && Array.isArray(cir.entities)) ? cir.entities.map((e) => e.value) : [];
+    const items = Array.isArray(liveItems) ? liveItems : [];
+    const target = entities.length > 0 ? entities.slice(0, 2) : [];
+
+    const obsLines = [];
+    target.forEach((asset) => {
+      const item = items.find((x) => x && x.asset === asset);
+      if (!item || !Number.isFinite(Number(item.value))) {
+        obsLines.push(`• **${assetLabel(asset)}:** داده لحظه‌ای برای این دارایی در دسترس نیست.`);
+        return;
+      }
+      const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
+      let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} تومان**`;
+      const ch = item.metadata && Number.isFinite(Number(item.metadata.change24h)) ? Number(item.metadata.change24h) : null;
+      if (ch !== null) {
+        const sign = ch > 0 ? '+' : '';
+        const flat = Math.abs(ch) < 0.05;
+        line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**${flat ? ' (عملاً بدون تغییر محسوس)' : ''}`;
+      }
+      obsLines.push(line);
+    });
+
+    const observation = obsLines.length > 0
+      ? obsLines.join('\n')
+      : 'برای دارایی موردپرسش، داده لحظه‌ای کافی در دسترس نیست.';
+
+    const assetsText = target.length > 0 ? target.map((a) => assetLabel(a)).join(' و ') : 'دارایی موردپرسش';
+
+    return `🔎 **مشاهده (فقط بر پایه داده امروز):**\n` +
+      `${observation}\n\n` +
+      `🧭 **محرک‌های محتمل — فقط در چارچوب شواهد:**\n` +
+      `• تعیین یک علت واحد برای رفتار امروز «${assetsText}» با داده‌های لحظه‌ای (قیمت و تغییر روزانه) ممکن نیست؛\n` +
+      `  محرک‌های رایج این بازار (نوسان ارز، اونس جهانی، تقاضای فیزیکی/فصلی، انتظارات و اسپرد معاملاتی) تنها با روند چندروزه قابل تفکیک‌اند.\n\n` +
+      `⚖️ **قدرت شاهد:** پایین تا متوسط — داده لحظه‌ای «چیستی» حرکت را نشان می‌دهد، نه «چرایی» آن.\n\n` +
+      `🧠 **تفسیر اقتصادی:** رفتار نزدیک به ثابت معمولاً محصول تعادل عرضه و تقاضا یا تثبیت موقت انتظارات است؛ اما بدون داده تاریخی، این یک فرضیه است، نه یافته.\n\n` +
+      `❓ **عدم‌قطعیت:** از داده‌های فعلی نمی‌توان علت قطعی تعیین کرد؛ برای تحلیل علت‌محور، در دسترس بودن روند تاریخی و رویدادهای بازار لازم است.`;
+  };
+
   return {
+    buildWhyResponse,
     RP_VERSION,
     RP_LEVELS,
     ASSET_LABELS,
@@ -1340,6 +1401,7 @@ const detectWhyQuery = ResponsePresentation.detectWhyQuery;
 const sanitizeUserFacingResponse = ResponsePresentation.sanitizeUserFacingResponse;
 const buildDegradedTimeframeResponse = ResponsePresentation.buildDegradedTimeframeResponse;
 const buildConciseMarketStatusResponse = ResponsePresentation.buildConciseMarketStatusResponse;
+const buildWhyResponse = ResponsePresentation.buildWhyResponse;
 
 // سقف توکن پاسخ بر اساس سیاست طول (SHORT / STANDARD / DEEP)
 const responseTokenCap = (level) => (level === ResponsePresentation.RP_LEVELS.SHORT ? 300
@@ -3792,7 +3854,11 @@ function renderWhatIfResponse(simResult) {
 /**
  * تولید پاسخ تحلیلی هوشمند، زمینه-محور و بلادرنگ برای چت‌بات مشاور دیدبان
  */
-function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEvidence = null) {
+function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEvidence = null, queryAnalysis = null, liveEvidenceItems = []) {
+  // Phase 2-3C: پرسش «چرا» — پاسخ قطعی ساختارمند (مشاهده → محرک محتمل → قدرت شاهد → تفسیر → عدم‌قطعیت)
+  if (typeof detectWhyQuery === 'function' && detectWhyQuery(userQuery)) {
+    return buildWhyResponse(queryAnalysis || {}, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
+  }
   const norm = normalizedEvidence || normalizeEvidenceMap(todayEvidence);
   const q = String(userQuery || '').toLowerCase();
 
@@ -3958,8 +4024,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
       }
 
       return `⚖️ **دامنه تعادلی و دینامیک حباب طلای ۱۸ عیار (افق ۱۴ روزه):**\n\n` +
-        `• **فرمول کانونیکال ارزش ذاتی گرم ۱۸ عیار:**\n` +
-        `  $$\\text{ارزش ذاتی} = \\frac{\\text{اونس جهانی (XAU)} \\times \\text{دلار آزاد} \\times 0.750}{31.1035} \\quad \\Big( \\text{یا} \\quad \\frac{\\text{مظنه مثقال}}{4.3318} \\Big)$$\n\n` +
+        `• **مبنای برآورد ارزش ذاتی گرم ۱۸ عیار:** بر پایه اونس جهانی، نرخ دلار آزاد و ضریب تبدیل استاندارد طلا.\n\n` +
         `• **کریدورهای ۳‌گانه تعادل و رفتار نوسانی در افق ۱۴ روزه:**\n` +
         `   - **۱. دامنه تعادلی و باثبات [۲٫۵٪- تا ۲٫۵٪+]:** بازار در حالت تعادل طبیعی نوسان می‌کند و فاقد حباب هیجانی است.\n` +
         `   - **۲. فاز اشباع خرید (بالای ۲٫۵٪+ به‌ویژه فراتر از ۴٫۰٪+):** نشانه هجوم تقاضای هیجانی؛ افزایش ریسک افت قیمت و بازگشت به نرخ تعادلی (Mean Reversion) در بازه ۱۴ روزه.\n` +
@@ -3990,8 +4055,8 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
         `• **تفسیر:** بالای ۵۰ واحد نشانه انبساط و رشد اقتصادی (Expansion)، و زیر ۵۰ واحد نشانه انقباض و رکود صنعتی (Contraction) است.`;
     }
     if (q.includes('نسبت طلا به نقره') || q.includes('طلا به نقره') || q.includes('xau/xag')) {
-      return `⚖️ **نسبت اونس طلا به نقره ($XAU/XAG$ Ratio):**\n\n` +
-        `• **فرمول:** $$\\text{Ratio} = \\frac{\\text{نرخ هر اونس طلا (XAU)}}{\\text{نرخ هر اونس نقره (XAG)}}$$\n` +
+      return `⚖️ **نسبت اونس طلا به نقره (XAU/XAG Ratio):**\n\n` +
+        `• **مبنای نسبت:** تقسیم نرخ هر اونس طلا بر نرخ هر اونس نقره.\n` +
         `• **تفسیر تحلیلی:** نسبت بالای ۸۵ نشانه ارزندگی شدید نقره؛ نسبت ۷۰ تا ۸۰ محدوده تعادلی؛ و نسبت زیر ۶۵ نشانه پیشتازی شتابان نقره در چرخه‌های رونق صنعتی است.`;
     }
     if (q.includes('cpi') || q.includes('قیمت مصرف کننده') || q.includes('مصرف‌کننده')) {
@@ -4007,7 +4072,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     }
     if (q.includes('p/e') || q.includes('پی بر ای') || q.includes('قیمت به درآمد')) {
       return `📊 **نسبت قیمت به درآمد (P/E Ratio) در بازار سهام:**\n\n` +
-        `• **فرمول:** $$\\text{P/E} = \\frac{\\text{قیمت هر سهم (Price)}}{\\text{سود هر سهم (EPS)}}$$\n` +
+        `• **مبنای نسبت:** تقسیم قیمت هر سهم بر سود هر سهم (EPS).\n` +
         `• **تفسیر:** نشان‌دهنده مدت زمان بازگشت سرمایه از محل سود شرکت است. P/E پایین در صنایع بنیادی نشانگر ارزندگی و P/E بالا نشانه انتظارات رشد در آینده است.`;
     }
     if (q.includes('صندوق') || q.includes('صندوق های بورسی')) {
@@ -4043,11 +4108,10 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
         `### پارامترهای مفروض ورودی:\n` +
         `• **نرخ فرضی دلار آزاد:** **${fmtFa(simUsd)} تومان**\n` +
         `• **نرخ فرضی اونس جهانی طلا ($XAU$):** **${fmtFa(simXau)} دلار**\n\n` +
-        `### محاسبات دقیق کانونیکال بر مبنای فرضیات فوق:\n` +
-        `• **۱. ارزش ذاتی محتوای طلای سکه تمام امامی:**\n` +
-        `  $$\\text{ارزش ذاتی} = \\frac{8.133 \\times 0.900 \\times ${fmtFa(simXau)} \\times ${fmtFa(simUsd)}}{31.1035} = \\mathbf{${fmtFa(simIntrinsic)} \\text{ تومان}}$$\n` +
+        `### نتایج محاسباتی بر مبنای مفروضات فوق:\n` +
+        `• **۱. ارزش ذاتی محتوای طلای سکه تمام امامی:** **${fmtFa(simIntrinsic)} تومان**\n` +
         `• **۲. قیمت تئوریک هر گرم طلای ۱۸ عیار:** **${fmtFa(simGold18)} تومان**\n` +
-        `• **۳. مظنه تئوریک یک مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(simMithqal)} تومان** (محاسبه: $4.3318 \\times ${fmtFa(simGold18)}$)\n\n` +
+        `• **۳. مظنه تئوریک یک مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(simMithqal)} تومان** (بر پایه ضریب تبدیل استاندارد طلا)\n\n` +
         `💡 **نکته تحلیلی:** در صورتی که قیمت بازار سکه در آن شرایط فرضی بالاتر از **${fmtFa(simIntrinsic)} تومان** باشد، مابه‌التفاوت آن حباب اسمی و پرمیوم تقاضای انتظاری خواهد بود.`;
     }
   }
@@ -4135,7 +4199,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     if (usd.hasData || gold18.hasData || sekee.hasData || xau.hasData) {
       dynamicEvidence = `\n\n### کارت برداشت آماری و شواهد ساختاری تابلوی فعال:\n` +
         `• **وضعیت تابلوی ارز و طلا:** دلار آزاد **${fmtFa(usd.price)} تومان** (${usd.change >= 0 ? '+' : ''}${fmtFa(usd.change, 2)}٪) | طلای ۱۸ عیار **${fmtFa(gold18.price)} تومان** (${gold18.change >= 0 ? '+' : ''}${fmtFa(gold18.change, 2)}٪) | اونس طلا **${fmtFa(xau.price)} دلار** (${xau.change >= 0 ? '+' : ''}${fmtFa(xau.change, 2)}٪).\n` +
-        `• **مظنه یک مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (نسبت کانونیکال ۴٫۳۳۱۸ به گرم ۱۸ عیار).\n` +
+        `• **مظنه یک مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا).\n` +
         (coinBubblePct !== null ? `• **رژیم حباب سکه امامی:** **${fmtFa(coinBubblePct, 1)}٪** (${fmtFa(coinBubbleToman)} تومان اضافه ارزش نسبت به ارزش ذاتی **${fmtFa(coinIntrinsic)} تومان**).\n` : '') +
         (usdtSpreadPct !== null ? `• **اسپرد تتر نسبت به دلار آزاد:** **${fmtFa(usdtSpreadPct, 2)}٪** (شکاف قیمتی **${fmtFa(usdtSpreadToman)} تومان**).\n` : '') +
         (tse.hasData ? `• **موازنه تابلوی بازار سرمایه:** شاخص کل **${fmtFa(tse.price)} واحد** (${tse.change >= 0 ? '+' : ''}${fmtFa(tse.change, 2)}٪) در برابر هم‌وزن **${fmtFa(tseEqual.price)} واحد**.` : '');
@@ -4175,13 +4239,13 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     }
 
     return `📈 **تحلیل کمّی و ساختاری همبستگی بازارها و واگرایی دارایی‌ها:**\n\n` +
-      `• **ضرایب همبستگی پیرسون تاریخی (Pearson R):**\n` +
-      `   - همبستگی طلای ۱۸ عیار با دلار آزاد: **$R \\approx +0.94$** (هم‌حرکتی مستقیم بسیار قدرتمند).\n` +
-      `   - همبستگی تتر با دلار کاغذی: **$R \\approx +0.98$** (انطباق کامل با انحراف اسپرد دوره‌ای).\n` +
-      `   - همبستگی طلای ۱۸ عیار با اونس جهانی طلا: **$R \\approx +0.65$** (تعدیل دوگانه بردار ارز و اونس).` +
+      `• **همبستگی تاریخی دارایی‌ها (هم‌حرکتی آماری):**\n` +
+      `   - همبستگی طلای ۱۸ عیار با دلار آزاد: **+۰٫۹۴** (هم‌حرکتی مستقیم بسیار قدرتمند).\n` +
+      `   - همبستگی تتر با دلار کاغذی: **+۰٫۹۸** (انطباق کامل با انحراف اسپرد دوره‌ای).\n` +
+      `   - همبستگی طلای ۱۸ عیار با اونس جهانی طلا: **+۰٫۶۵** (تعدیل دوگانه بردار ارز و اونس).` +
       divAnalysis +
       spreadAnalysis +
-      `\n\n• **برابری مظنه مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (محاسبه دقیق کانونیکال: $4.3318 \\times \\text{قیمت هر گرم ۱۸ عیار}$).`;
+      `\n\n• **برابری مظنه مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا).`;
   }
 
   // ۶. پاسخ به تحلیل حباب سکه، طلای ۱۸ عیار و طلای آب‌شده
@@ -4191,7 +4255,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
       liveBubbleDetails = `\n### 📌 محاسبه زنده حباب تابلوی امروز:\n` +
         `• **۱. سکه تمام امامی:** ارزش ذاتی **${fmtFa(coinIntrinsic)} تومان** | نرخ بازار: **${fmtFa(sekee.price)} تومان** ──► **حباب: ${fmtFa(coinBubblePct, 1)}٪** (${fmtFa(coinBubbleToman)} تومان).\n` +
         (gold18Intrinsic !== null ? `• **۲. هر گرم طلای ۱۸ عیار:** ارزش ذاتی **${fmtFa(gold18Intrinsic)} تومان** | نرخ بازار: **${fmtFa(gold18.price)} تومان** ──► **حباب تحلیلی: ${gold18BubblePct >= 0 ? '+' : ''}${fmtFa(gold18BubblePct, 2)}٪**.\n` : '') +
-        `• **۳. مظنه یک مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (برابری ۴٫۳۳۱۸ به هر گرم ۱۸ عیار).\n`;
+        `• **۳. مظنه یک مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا).\n`;
     }
 
     let gold18Analysis = '';
@@ -4209,10 +4273,8 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     }
 
     return `📊 **تحلیل دقیق و ریاضی ساختار حباب سکه و مسکوکات، طلای ۱۸ عیار و طلای آب‌شده:**\n\n` +
-      `• **فرمول کانونیکال محاسبه ارزش ذاتی سکه امامی:**\n` +
-      `  $$\\text{ارزش ذاتی سکه} = \\left( \\frac{\\text{وزن ۸.۱۳۳ گرم} \\times \\text{عیار ۰.۹۰۰} \\times \\text{اونس جهانی} \\times \\text{نرخ دلار آزاد}}{31.1035} \\right) + \\text{حق ضرب رسمی}$$\n` +
-      `• **فرمول کانونیکال ارزش ذاتی هر گرم طلای ۱۸ عیار:**\n` +
-      `  $$\\text{ارزش ذاتی گرم ۱۸} = \\frac{\\text{اونس جهانی} \\times \\text{دلار آزاد} \\times 0.750}{31.1035}$$\n` +
+      `• **مبنای برآورد ارزش ذاتی سکه امامی:** وزن و عیار سکه، اونس جهانی، نرخ دلار آزاد و حق ضرب رسمی.\n` +
+      `• **مبنای برآورد ارزش ذاتی هر گرم طلای ۱۸ عیار:** اونس جهانی، نرخ دلار آزاد و ضریب تبدیل استاندارد.\n` +
       liveBubbleDetails +
       gold18Analysis +
       `\n• **خط‌کش سه‌سطحی ارزیابی ریسک حباب مسکوکات:**\n` +
@@ -4245,7 +4307,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     `درخواست شما درباره «${userQuery}» ارزیابی شد. خلاصه موازنه چندبعدی تابلوی فعال:\n\n` +
     `• **بازار ارز:** دلار آزاد **${fmtFa(usd.price)} تومان** | تتر **${fmtFa(usdt.price)} تومان** (اسپرد: **${fmtFa(usdtSpreadPct, 2)}٪**)\n` +
     `• **بازار طلا:** طلای ۱۸ عیار **${fmtFa(gold18.price)} تومان** | سکه تمام **${fmtFa(sekee.price)} تومان** (حباب: **${fmtFa(coinBubblePct, 1)}٪**)\n` +
-    `• **طلای آب‌شده:** مظنه مثقال ۱۷ عیار **${fmtFa(mithqalPrice)} تومان** (هر گرم ۱۸ عیار × ۴٫۳۳۱۸)\n` +
+    `• **طلای آب‌شده:** مظنه مثقال ۱۷ عیار **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا)\n` +
     `• **شاخص کل بورس:** **${fmtFa(tse.price)} واحد** (${tse.change >= 0 ? '+' : ''}${fmtFa(tse.change, 2)}٪)\n\n` +
     `جهت بررسی تخصصی‌تر، می‌توانید یکی از گزینه‌های **سناریوهای ۴گانه بازار**، **واگرایی طلا و دلار**، **حباب سکه و طلای آب‌شده** یا **ساختار بورس** را مطرح فرمایید.`;
 }
