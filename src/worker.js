@@ -1695,6 +1695,11 @@ const ResponsePresentation = (() => {
 
   const KNOWLEDGE_PRESENT_MIN_SCORE = 0.70;
 
+  // Phase 2-3F-B3: بررسی قطعی موجودبودن مقدار زنده (پایه مشترک توابع جدید؛ جایگزین تکرار شرط گارد)
+  const hasLiveValue = (item) =>
+    Boolean(item) && item.value !== null && item.value !== undefined && item.value !== '' && Number.isFinite(Number(item.value));
+
+
   const trimKnowledgeContent = (content) => {
     const raw = String(content || '');
     if (!raw) return '';

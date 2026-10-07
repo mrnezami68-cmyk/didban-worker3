@@ -13,6 +13,7 @@
 * **نرمال‌سازی:** «؟» فارسی به «?» در `normalizeText` — Small Talk قطعی («خوبی؟») بدون LLM پاسخ می‌گیرد.
 * **سلامت:** `/api/health` فاز `Phase 2-3F-B3 (Knowledge Routing, Intent Isolation & Presentation)` و `knowledgeRouting: ENABLED (Phase 2-3F-B3 ...)` را گزارش می‌کند؛ `temporalSafety`/`dataIntegrity` فریزشده باقی است.
 * **QA:** ۱۰۰٪ کل ۵۸ سوئیت جامع QA سبز؛ برابری بایت‌به‌بایت دو نسخه ورکر؛ صفر تغییر در فرمول‌ها، Identity/MAKAN، D1 و Anti-Signal.
+* **hotfix همان فاز:** تعریف تابع کمکی `hasLiveValue` در دامنه ماژول ارائه — پیش از رفع، مسیرهای «کارت تک‌دارایی» و «مقایسه توصیفی» خطای زمان اجرا می‌دادند؛ کشف با ممیزی زنده ۲-۳C و رفع پیش از بستن فاز (بدون تغییر رفتار سایر مسیرها).
 
 ## [v4.0.0-phase2-3f-b2] — ایمنی زمانی و پیوستگی گفت‌وگو (Phase 2-3F-B2)
 * **ایمنی زمانی:** درخواست HISTORICAL/FORECAST بدون شواهد همان افق ⇒ پاسخ قطعی «داده تاریخی در دسترس نیست» و ممنوعیت جانشینی LIVE؛ در صورت ارائه شواهد تاریخی معتبر (`body.historical`) همان شواهد با `HISTORICAL_EVIDENCE_PRESENTATION` نمایش می‌یابد.
