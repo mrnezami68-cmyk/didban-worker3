@@ -14,7 +14,7 @@
  *     - تطبیق ساختار ۳ لایه (مشاهده عینی ──► تفسیر محتاطانه ──► احتیاط و سلب قطعیت علّی)
  *  ۴. کشینگ هوشمند لبه (Edge In-Memory Cache) با زمان انقضای ۵ دقیقه‌ای تا ۲۴ ساعته.
  *  ۵. استقلال ۱۰۰٪ از دیتابیس D1 (Zero DB Coupling).
- *  ۶. اندپوینت چت مشاور هوشمند دیدبان (/api/ai/chat) با تحلیل کاملاً پویا و زنده و بدون متون ایستا.
+ *  ۶. اندپوینت چت «ماکان» (/api/ai/chat) با تحلیل کاملاً پویا و زنده؛ پاسخ‌های هویتی از پروفایل کانونیکال.
  *
  * 100% self-contained ES module, ready for Cloudflare Quick Edit.
  */
@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3C (Evidence Integration, Conversational Response Quality & End-to-End QA)';
+const WORKER_PHASE = 'Phase 2-3D (Canonical Identity Profile — MAKAN)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -140,6 +140,7 @@ export default {
         knowledgeRetriever: 'ENABLED (Phase 2-1 Deterministic Core)',
         evidenceBuilder: 'ENABLED (Phase 2-2 Unified Evidence Contract v1.0)',
         workingMemory: 'ENABLED (Phase 2-3B Semantic Working Memory v1.0 — client-carried, stateless worker)',
+        identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
           active: ['LIVE', 'DERIVED', 'HYPOTHETICAL', 'KNOWLEDGE'],
@@ -302,6 +303,20 @@ export default {
             reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.',
             source: 'ANTI_SIGNAL_GUARD',
             unifiedEvidence: restrictedContract,
+            timestamp: new Date().toISOString()
+          }), { headers: corsHeaders });
+        }
+
+        // ۲.۴. هویت کانونیکال «ماکان» (Phase 2-3D): پاسخ ثابت از پروفایل مرجع —
+        // بدون فراخوانی LLM و بدون هیچ جزء بازار (شواهد/نرمال‌سازی/همبستگی/سناریو/دانش/تاریخ)
+        const identityIntent = detectIdentityQuery(userMsg);
+        if (identityIntent) {
+          return new Response(JSON.stringify({
+            success: true,
+            reply: buildIdentityResponse(identityIntent.tier),
+            source: 'IDENTITY_STATIC_PROFILE',
+            identityTier: identityIntent.tier,
+            responseLevel: identityTierLevel(identityIntent.tier),
             timestamp: new Date().toISOString()
           }), { headers: corsHeaders });
         }
@@ -978,6 +993,159 @@ function analyzeQuery(rawText, recentContext = [], todayEvidence = {}) {
    «Computation is internal. Explanation is user-facing.»
    ========================================================================== */
 
+const MakanIdentityProfile = (() => {
+  const IDENTITY_VERSION = '1.0';
+
+  /* ==========================================================================
+     محتوای کانونیکال (متن مرجع — کلمه‌به‌کلمه؛ دست‌نخورده و منجمد)
+     ========================================================================== */
+
+  const CANONICAL_IDENTITY_PARAGRAPHS = [
+    'من ماکان هستم؛ دستیار هوشمند و تحلیلی «دیدبان بازار».',
+
+    'نام من از نام یکی از قهرمانان ایران، شهید ماکان نصیری، گرفته شده است؛ کودکی که نامش برای بسیاری از مردم ایران، فراتر از یک نام، یادآور معصومیت از دست‌رفته و رنج کودکانی است که دیگر به خانه و مدرسه بازنگشتند.',
+
+    'ماکان نصیری متولد ۹ اسفند ۱۳۹۷ بود و در روز تولد هفت‌سالگی‌اش، ۹ اسفند ۱۴۰۴، در جریان حمله وحشیانه آمریکا به مدرسه شجره طیبه میناب به شهادت رسید.',
+
+    'نام او امروز برای مردم ایران تنها نام یک کودک نیست؛ نشانی است از بغض مادرانی که چشم‌انتظار ماندند، از نیمکت خالی کودکی که دیگر صدایش در کلاس شنیده نمی‌شود، و از یاد فرزندانی که زندگی‌شان پیش از آنکه فرصت شکوفایی پیدا کند، ناتمام ماند.',
+
+    'هر سال با آغاز سال تحصیلی، وقتی نام ماکان در کلاس خوانده می‌شود، شاید سکوت پاسخ آن نیمکت خالی باشد؛ اما یاد او و دیگر کودکان از دست‌رفته، همچنان زنده است.',
+
+    'من این نام را با احترام بر خود دارم؛ و در «دیدبان بازار» تلاش می‌کنم با دقت، شفافیت و مسئولیت‌پذیری، در تحلیل داده‌ها و فهم بهتر بازار در کنار شما باشم.'
+  ];
+
+  const CANONICAL_SHORT_IDENTITY = CANONICAL_IDENTITY_PARAGRAPHS[0];
+  const CANONICAL_NAME_ORIGIN = CANONICAL_IDENTITY_PARAGRAPHS.slice(1).join('\n\n');
+  const CANONICAL_FULL_IDENTITY = CANONICAL_IDENTITY_PARAGRAPHS.join('\n\n');
+
+  /* معرفی کوتاه (Tier 2) — داده‌ی ثابت پروفایل، نه تولید مدل */
+  const CANONICAL_INTRODUCTION = [
+    CANONICAL_SHORT_IDENTITY,
+    'من یک دستیار هوش مصنوعی هستم که برای تحلیل داده‌های بازار ایران و جهان طراحی شده‌ام. کارهایی که می‌توانم انجام دهم:',
+    '• بررسی قیمت و تغییرات دارایی‌ها (دلار، تتر، طلا، سکه، ارز دیجیتال و بورس)',
+    '• تحلیل هم‌حرکتی و رابطه دارایی‌ها و مقایسه‌های ساختاری',
+    '• بررسی سناریوهای فرضی («اگر ...» چه می‌شود؟)',
+    '• تبیین مفاهیم اقتصادی مانند حباب، اسپرد و نسبت‌ها',
+    'یک نکته شفاف: من سیگنال معاملاتی، نقطه ورود/خروج یا پیشنهاد خرید و فروش صادر نمی‌کنم؛ تحلیل و داده ارائه می‌کنم و تصمیم نهایی با شماست.'
+  ].join('\n\n').replace(/\n\n• /g, '\n• ');
+
+  const MAKAN_IDENTITY_PROFILE = {
+    version: IDENTITY_VERSION,
+    name: 'ماکان',
+    englishName: 'MAKAN',
+    role: 'دستیار هوشمند و تحلیلی «دیدبان بازار»',
+    shortIdentity: CANONICAL_SHORT_IDENTITY,
+    fullIdentity: CANONICAL_FULL_IDENTITY,
+    nameOrigin: CANONICAL_NAME_ORIGIN,
+    introduction: CANONICAL_INTRODUCTION,
+    canonicalFrozen: true,
+
+    responsePolicy: {
+      directIdentity: 'SHORT',
+      selfIntroduction: 'MEDIUM',
+      nameOrigin: 'FULL',
+      llmRewrite: false,
+      factualModification: false,
+      marketEvidenceInjection: false
+    },
+
+    trustPriority: ['CANONICAL_IDENTITY', 'SYSTEM_IDENTITY_STATE', 'USER_TEXT', 'HISTORY', 'LLM_OUTPUT']
+  };
+
+  /* ==========================================================================
+     سطوح پاسخ هویتی (Tiered Identity Responses)
+     ========================================================================== */
+
+  const IDENTITY_TIERS = { SHORT: 'SHORT', INTRO: 'INTRO', ORIGIN: 'ORIGIN' };
+
+  // نقشه سطح پاسخ UI/سرویس: SHORT → SHORT، معرفی → STANDARD، ریشه نام → STANDARD
+  const IDENTITY_TIER_LEVELS = { SHORT: 'SHORT', INTRO: 'STANDARD', ORIGIN: 'STANDARD' };
+
+  const buildIdentityResponse = (tier) => {
+    if (tier === IDENTITY_TIERS.ORIGIN) return MAKAN_IDENTITY_PROFILE.fullIdentity;
+    if (tier === IDENTITY_TIERS.INTRO) return MAKAN_IDENTITY_PROFILE.introduction;
+    return MAKAN_IDENTITY_PROFILE.shortIdentity;
+  };
+
+  /* ==========================================================================
+     تشخیص قطعی نیت هویت (Identity Intent Detection)
+     ========================================================================== */
+
+  // گارد دامنه: هر پرسش حاوی واژه بازار هرگز پرسش هویتی نیست (هویت بازار را جذب نمی‌کند)
+  const IDENTITY_DOMAIN_GUARD = /(قیمت|نرخ|دلار|طلای|طلا|سکه|تتر|اونس|نقره|بیت|کریپتو|ارز\s*دیجیتال|بورس|شاخص|حباب|اسپرد|صرافی|معامل|خرید|فروش|سهام|فارکس|کامودیتی|مسکن|خودرو)/;
+
+  const IDENTITY_PATTERNS = [
+    // Tier 3 — ریشه/داستان نام (باید پیش از Tier 1 بررسی شود)
+    { tier: 'ORIGIN', re: /(اسم|نام)(ت|تون|شما|مون)?\s*(را|رو)?\s*ماکان/ },
+    { tier: 'ORIGIN', re: /ماکان\s*(چیست|چیه|کیست|کیه|یعنی\s*(چی|چه)|چه\s*معنی|به\s*چه\s*معنا)/ },
+    { tier: 'ORIGIN', re: /(داستان|سرگذشت|ریشه|معنی|معنای|مفهوم|انتخاب)\s*(اسم|نام)?\s*ماکان/ },
+    { tier: 'ORIGIN', re: /(چرا|به\s*چه\s*دلیل)\s*(اسم|نام)?\s*(ماکان|تو\s*ماکان|شما\s*ماکان)/ },
+    { tier: 'ORIGIN', re: /(چرا|چطور)\s*ماکان/ },
+    { tier: 'ORIGIN', re: /why\s+(is\s+)?(your\s+)?name\s+makan|why\s+(are\s+you\s+)?(called|named)\s+makan|makan\s+(meaning|story|origin)/ },
+
+    // Tier 1 — هویت مستقیم
+    { tier: 'SHORT', re: /(^|\s)(اسم|نام)(ت|تون|شما)?\s+(چیه|چیست|چی\s*هست|چی\s*است)/ },
+    { tier: 'SHORT', re: /(^|\s)(اسم|نام)\s+(تو|شما|خودت|خودتون)\s+(چیه|چیست|چی\s*هست)/ },
+    { tier: 'SHORT', re: /(^|\s)(تو|شما)\s+کی\s*(هستی|هستید)/ },
+    { tier: 'SHORT', re: /(^|\s)کی\s+هستی(\s|$|\?|؟)/ },
+    { tier: 'SHORT', re: /what'?s\s+your\s+name|who\s+are\s+you/ },
+
+    // Tier 2 — معرفی خود
+    { tier: 'INTRO', re: /(خودت|خودتو|خودتون|خودتان|خودت\s*را|خودت\s*رو)\s*(رو|را)?\s*(معرفی|بشناس)/ },
+    { tier: 'INTRO', re: /(درباره|در\s*مورد|راجع\s*به)\s*(خودت|خودتون|خودتان|تو|شما)\s*(بگو|توضیح|حرف\s*بزن|بیشتر)/ },
+    { tier: 'INTRO', re: /(تو|شما)\s*(چه\s*کار|چی\s*کار|چیکار)\s*(می\s*کنی|می‌کنی|می\s*کنید|می‌کنید|انجام\s*می\s*دی|انجام\s*می‌دهی)/ },
+    { tier: 'INTRO', re: /(کارت|کارتون|وظیفت|وظیفه\s*ات|تخصصت|تخصص\s*شما)\s*(چیه|چیست)/ },
+    { tier: 'INTRO', re: /(^|\s)معرفی\s*کن(\s|$)/ },
+    { tier: 'INTRO', re: /what\s+do\s+you\s+do|introduce\s+yourself|tell\s+me\s+about\s+yourself/ }
+  ];
+
+  const normalizeIdentityText = (rawText) => String(rawText === null || rawText === undefined ? '' : rawText)
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/\u200c{2,}/g, '\u200c')
+    .replace(/[ \t\u200c]+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  /**
+   * تشخیص قطعی پرسش هویتی. در صورت وجود واژه بازار یا پیام بلند، null برمی‌گردد.
+   * @returns {null | {tier: 'SHORT'|'INTRO'|'ORIGIN', matched: string}}
+   */
+  const detectIdentityQuery = (rawText) => {
+    const s = normalizeIdentityText(rawText);
+    if (!s) return null;
+    if (IDENTITY_DOMAIN_GUARD.test(s)) return null;
+    if (s.length > 140) return null;
+    for (const p of IDENTITY_PATTERNS) {
+      const m = s.match(p.re);
+      if (m) return { tier: p.tier, matched: m[0] };
+    }
+    return null;
+  };
+
+  /**
+   * سطح پاسخ سرویس (Response Level) برای هر Tier هویتی.
+   */
+  const identityTierLevel = (tier) => IDENTITY_TIER_LEVELS[tier] || IDENTITY_TIER_LEVELS.SHORT;
+
+  /**
+   * خط شناسه هویتی برای جایگزینی رشته‌های هویتی قدیمی در لایه‌های نمایش:
+   * «ماکان — دستیار هوشمند و تحلیلی «دیدبان بازار»»
+   */
+  const identityRoleLine = () => `${MAKAN_IDENTITY_PROFILE.name} — ${MAKAN_IDENTITY_PROFILE.role}`;
+
+  return {
+    IDENTITY_VERSION,
+    MAKAN_IDENTITY_PROFILE,
+    IDENTITY_TIERS,
+    IDENTITY_TIER_LEVELS,
+    detectIdentityQuery,
+    buildIdentityResponse,
+    identityTierLevel,
+    identityRoleLine
+  };
+})();
+
 const ResponsePresentation = (() => {
   const RP_VERSION = '1.0';
 
@@ -1073,19 +1241,31 @@ const ResponsePresentation = (() => {
      ۲) پاسخ‌های گفت‌وگوی عمومی (طبیعی، کوتاه، بدون ادامه‌دهی بی‌پایان)
      ========================================================================== */
 
+  // خط هویتی برای پیام‌های استقبال؛ تنها از پروفایل کانونیکال «ماکان» خوانده می‌شود.
+  const identityOpeningLine = () => {
+    if (typeof MakanIdentityProfile !== 'undefined' && MakanIdentityProfile.MAKAN_IDENTITY_PROFILE) {
+      return MakanIdentityProfile.MAKAN_IDENTITY_PROFILE.shortIdentity;
+    }
+    return 'من دستیار هوش مصنوعی «دیدبان بازار» هستم.';
+  };
+
   const buildSmallTalkResponse = (kind, options = {}) => {
     const name = options.userName ? ` ${options.userName}` : '';
     const replies = {
+      // خط هویتی استقبال، از منبع کانونیکال خوانده می‌شود (بدون کپی متن هویتی در این فایل)
       GREETING:
-        'سلام، وقت بخیر 🌱\n\nمن دستیار هوشمند تحلیلی «دیدبان بازار» هستم و می‌توانم در بررسی قیمت‌ها و رفتار دارایی‌ها، نسبت‌ها و روابط بین بازارها، سناریوهای فرضی، حباب و اسپرد و مفاهیم اقتصادی به شما کمک کنم.\n\nچطور می‌توانم کمکتان کنم؟',
+        'سلام، وقت بخیر 🌱\n\n' + identityOpeningLine() + ' می‌توانم در بررسی قیمت‌ها و رفتار دارایی‌ها، نسبت‌ها و روابط بین بازارها، سناریوهای فرضی، حباب و اسپرد و مفاهیم اقتصادی کمکتان کنم.\n\nچطور می‌توانم کمکتان کنم؟',
       HOW_ARE_YOU:
-        'سلام، وقت بخیر 🌱\n\nممنونم، آماده‌ام کمک کنم. من دستیار تحلیلی «دیدبان بازار» هستم؛ کافی است بگویید کدام دارایی یا کدام موضوع بازار را بررسی کنیم.\n\nمثلاً می‌توانید بپرسید: «قیمت دلار چنده؟» یا «اگر دلار بالا بره، طلا چه می‌شود؟»',
+        'سلام، وقت بخیر 🌱\n\nممنونم، آماده‌ام کمک کنم. ' + identityOpeningLine() + '\n\nکافی است بگویید کدام دارایی یا کدام موضوع بازار را بررسی کنیم؛ مثلاً می‌توانید بپرسید: «قیمت دلار چنده؟» یا «اگر دلار بالا بره، طلا چه می‌شود؟»',
       THANKS:
         'خواهش می‌کنم 🙏\n\nاگر سؤال تحلیلی دیگری درباره بازار، دارایی‌ها یا سناریوها داشتید، در خدمتم.',
       FAREWELL:
         'خدانگهدار 🌱\n\nهر زمان سؤال تحلیلی داشتید، در خدمتم.',
+      // هویت: تنها منبع مرجع، پروفایل کانونیکال «ماکان» است (js/engine/identity-profile.js)
       INTRO_REQUEST:
-        'من «دستیار هوشمند تحلیلی دیدبان بازار» هستم — یک دستیار هوش مصنوعی برای تحلیل داده‌های بازار ایران و جهان.\n\nکارهایی که می‌توانم انجام دهم:\n• بررسی قیمت و تغییرات دارایی‌ها (دلار، تتر، طلا، سکه، ارز دیجیتال، بورس)\n• مقایسه و تحلیل روابط بین دارایی‌ها\n• شبیه‌سازی سناریوهای فرضی (مثلاً «اگر دلار ۱۰٪ بالا بره...»)\n• تبیین مفاهیم اقتصادی مانند حباب، اسپرد و نسبت‌ها\n\nو یک نکته شفاف: من سیگنال معاملاتی، نقطه ورود/خروج یا پیشنهاد خرید و فروش صادر نمی‌کنم؛ تحلیل و داده ارائه می‌کنم و تصمیم نهایی با شماست.\n\nچه چیزی را بررسی کنیم؟',
+        (typeof MakanIdentityProfile !== 'undefined' && MakanIdentityProfile.buildIdentityResponse)
+          ? MakanIdentityProfile.buildIdentityResponse(MakanIdentityProfile.IDENTITY_TIERS.INTRO)
+          : 'من دستیار هوش مصنوعی «دیدبان بازار» هستم.',
       IDENTITY_GENDER:
         'من یک دستیار هوش مصنوعی هستم و جنسیت انسانی ندارم؛ یک برنامهٔ نرم‌افزاری تحلیلی برای داده‌های بازار هستم.\n\nاگر سؤال تحلیلی درباره بازار دارید، در خدمتم.',
       IDENTITY_LOVE:
@@ -1406,6 +1586,13 @@ const buildWhyResponse = ResponsePresentation.buildWhyResponse;
 // سقف توکن پاسخ بر اساس سیاست طول (SHORT / STANDARD / DEEP)
 const responseTokenCap = (level) => (level === ResponsePresentation.RP_LEVELS.SHORT ? 300
   : (level === ResponsePresentation.RP_LEVELS.DEEP ? 750 : 480));
+
+// پل دسترسی سطح‌اسکریپت ورکر به پروفایل هویت کانونیکال (Phase 2-3D)
+const MAKAN_IDENTITY_PROFILE = MakanIdentityProfile.MAKAN_IDENTITY_PROFILE;
+const detectIdentityQuery = MakanIdentityProfile.detectIdentityQuery;
+const buildIdentityResponse = MakanIdentityProfile.buildIdentityResponse;
+const identityTierLevel = MakanIdentityProfile.identityTierLevel;
+const identityRoleLine = MakanIdentityProfile.identityRoleLine;
 
 /* ==========================================================================
    Phase 2-3B — Working Memory & Multi-Turn Anaphora State Machine
@@ -4303,7 +4490,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
   }
 
   // ۸. پاسخ عمومی چندبعدی در صورت سوالات ترکیبی یا عمومی
-  return `💡 **مشاور تحلیلی هوشمند دیدبان بازار:**\n\n` +
+  return `💡 **${identityRoleLine()}:**\n\n` +
     `درخواست شما درباره «${userQuery}» ارزیابی شد. خلاصه موازنه چندبعدی تابلوی فعال:\n\n` +
     `• **بازار ارز:** دلار آزاد **${fmtFa(usd.price)} تومان** | تتر **${fmtFa(usdt.price)} تومان** (اسپرد: **${fmtFa(usdtSpreadPct, 2)}٪**)\n` +
     `• **بازار طلا:** طلای ۱۸ عیار **${fmtFa(gold18.price)} تومان** | سکه تمام **${fmtFa(sekee.price)} تومان** (حباب: **${fmtFa(coinBubblePct, 1)}٪**)\n` +
@@ -4574,7 +4761,7 @@ function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null, 
    - شواهد کلیدی موردنیاز (Required Evidence): ${queryAnalysis.evidencePlan?.required?.join('، ') || 'شواهد پایه'}\n`;
   }
 
-  return `شما «مشاور هوشمند تحلیلی دیدبان بازار» هستید؛ یک دستیار تحلیلی مالی با تسلط بر اقتصاد کلان ایران، بازار طلا، ارز، کریپتو و بورس تهران.
+  return `شما «ماکان»، دستیار هوشمند و تحلیلی «دیدبان بازار» هستید؛ یک دستیار تحلیلی مالی با تسلط بر اقتصاد کلان ایران، بازار طلا، ارز، کریپتو و بورس تهران.
 
 ضوابط محوری پاسخ‌گویی:
 ۱. ادبیات حرفه‌ای، روان و انسانی؛ پاسخ دقیقاً به همان چیزی که کاربر پرسیده است (Intent Adherence). سؤال ساده را به گزارش جامع تبدیل نکنید.
@@ -4611,7 +4798,7 @@ function buildSystemPrompt(mode) {
     modeDesc = 'تحلیل ساختار کلان ماهانه، روند بازدهی بلندمدت، شکاف بازارهای موازی و دینامیک بین‌بازاری';
   }
 
-  return `شما «تحلیلگر ارشد و ناظر هوشمند اقتصادی دیدبان بازار» هستید.
+  return `شما «ماکان»، تحلیلگر ارشد و ناظر هوشمند اقتصادی «دیدبان بازار» هستید.
 مأموریت شما: تنظیم «${modeDesc}» به زبان فارسی شیوا، روان، دقیق، منسجم و در تراز یک نشریه اقتصادی معتبر است.
 
 اصول نگارش و ادبیات اقتصادی (Professional Standards):
