@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3F-B1 (Data Integrity & Crypto Evidence Repair)';
+const WORKER_PHASE = 'Phase 2-3F-B2 (Temporal Safety & Conversational Continuity)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -142,6 +142,7 @@ export default {
         workingMemory: 'ENABLED (Phase 2-3B Semantic Working Memory v1.0 — client-carried, stateless worker)',
         scenarioBinding: 'ENABLED (Phase 2-3E-B Multi-Asset Scenario Binding & Intent Gate v1.0)',
         dataIntegrity: 'ENABLED (Phase 2-3F-B1 Crypto Evidence Normalization & pct24h->change24h Mapping v1.0)',
+        temporalSafety: 'ENABLED (Phase 2-3F-B2 Historical No-LIVE-Substitution & Conversational Continuity v1.0)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
@@ -348,6 +349,20 @@ export default {
           ? body.queryAnalysis
           : null;
         const queryAnalysis = clientCir || analyzeQuery(userMsg, analysisHistory, todayEvidence);
+
+        // FIX-B2-2 (Phase 2-3F-B2): ایمنی مستقل ورکر — تشخیص قطعی افق زمانی از متن کاربر حتی بدون CIR
+        if (queryAnalysis && typeof queryAnalysis === 'object') {
+          if (!queryAnalysis.context) queryAnalysis.context = { isFollowUp: false, resolvedFromContext: [] };
+          if (!queryAnalysis.context.timeframe || !queryAnalysis.context.timeframe.horizon) {
+            const _resolvedTf = resolveTemporal(userMsg);
+            queryAnalysis.context.timeframe = {
+              label: _resolvedTf.label,
+              horizon: _resolvedTf.horizon,
+              requiresHistoricalData: _resolvedTf.requiresHistoricalData,
+              requiresForecastCapability: _resolvedTf.requiresForecastCapability
+            };
+          }
+        }
         const requestLevel = classifyResponseLevel(queryAnalysis, userMsg);
         const isTechnicalRequest = detectTechnicalRequest(userMsg);
         const isWhyQuestion = detectWhyQuery(userMsg);
@@ -394,6 +409,7 @@ export default {
           cir: queryAnalysis,
           rawEvidence: normalizedEvidence,
           retrievedKnowledge,
+          historical: Array.isArray(body.historical) ? body.historical : [],
           options: { alreadyNormalized: true }
         });
 
@@ -406,6 +422,25 @@ export default {
         const needsForecast = !!(tfCtx && tfCtx.requiresForecastCapability);
         const isConditionalScenarioRequest = (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON');
         if ((needsHistorical || needsForecast) && !isConditionalScenarioRequest) {
+          // FIX-B2-1 (Phase 2-3F-B2): شاخه «شواهد تاریخی موجود» — استفاده از همان شواهد، بدون هیچ جانشینی LIVE
+          const historicalItems = (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.historical))
+            ? unifiedEvidenceContract.evidence.historical
+            : [];
+          if (needsHistorical && historicalItems.length > 0) {
+            const historicalReply = buildHistoricalEvidenceResponse(queryAnalysis, historicalItems);
+            if (historicalReply) {
+              return new Response(JSON.stringify({
+                success: true,
+                reply: historicalReply,
+                source: 'HISTORICAL_EVIDENCE_PRESENTATION',
+                responseLevel: RESPONSE_LEVELS.STANDARD,
+                interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+                retrievedKnowledge,
+                unifiedEvidence: unifiedEvidenceContract,
+                timestamp: new Date().toISOString()
+              }), { headers: corsHeaders });
+            }
+          }
           const degradedReply = buildDegradedTimeframeResponse(queryAnalysis);
           if (degradedReply) {
             return new Response(JSON.stringify({
@@ -1440,7 +1475,7 @@ const ResponsePresentation = (() => {
      ========================================================================== */
 
   const TIMEFRAME_LABELS = {
-    TODAY: 'امروز', YESTERDAY: 'دیروز', TOMORROW: 'فردا',
+    TODAY: 'امروز', YESTERDAY: 'دیروز', PAST_YEAR: 'سال گذشته', TOMORROW: 'فردا',
     PAST_WEEK: 'هفته گذشته', NEXT_WEEK: 'هفته آینده', END_OF_WEEK: 'تا پایان هفته',
     THIS_WEEK: 'هفته جاری', PAST_MONTH: 'ماه گذشته', NEXT_MONTH: 'ماه آینده',
     THIS_MONTH: 'ماه جاری', END_OF_MONTH: 'تا پایان ماه', NEXT_DAYS: 'روزهای آینده'
@@ -1600,6 +1635,43 @@ const detectTechnicalRequest = ResponsePresentation.detectTechnicalRequest;
 const detectWhyQuery = ResponsePresentation.detectWhyQuery;
 const sanitizeUserFacingResponse = ResponsePresentation.sanitizeUserFacingResponse;
 const buildDegradedTimeframeResponse = ResponsePresentation.buildDegradedTimeframeResponse;
+
+// FIX-B2-1 (Phase 2-3F-B2): نمایش قطعی شواهد تاریخی ارائه‌شده توسط فراخوان — بدون هیچ عدد LIVE و بدون جانشینی
+function buildHistoricalEvidenceResponse(cir = {}, historicalItems = []) {
+  if (!Array.isArray(historicalItems) || historicalItems.length === 0) return null;
+  const toFaDigitsHist = (v) => String(v).replace(/[0-9]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+  const fmtHist = (num, decimals = 2) => {
+    const n = Number(num);
+    if (!Number.isFinite(n)) return null;
+    return toFaDigitsHist(Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })).replace(/,/g, '٬').replace(/\./g, '٫');
+  };
+  const tf = (cir && cir.context && cir.context.timeframe) || {};
+  const labelMap = { YESTERDAY: 'دیروز', PAST_WEEK: 'هفته گذشته', PAST_MONTH: 'ماه گذشته', PAST_YEAR: 'سال گذشته' };
+  const label = labelMap[tf.label] || 'بازه تاریخی درخواستی';
+  const lines = [];
+  historicalItems.forEach((it) => {
+    if (!it || typeof it !== 'object') return;
+    const assetValue = it.asset || null;
+    const name = assetValue ? ResponsePresentation.assetLabel(assetValue) : (it.label ? String(it.label) : null);
+    if (!name) return;
+    const parts = [];
+    if (it.value !== null && it.value !== undefined && it.value !== '' && Number.isFinite(Number(it.value))) {
+      const v = fmtHist(it.value, Math.abs(Number(it.value)) >= 1000 ? 0 : 2);
+      if (v) parts.push(`مقدار: **${v}**${it.unit ? ' ' + String(it.unit) : ''}`);
+    }
+    const chRaw = (it.changePct !== undefined) ? it.changePct : ((it.change24h !== undefined) ? it.change24h : it.pct24h);
+    if (chRaw !== null && chRaw !== undefined && chRaw !== '' && Number.isFinite(Number(chRaw))) {
+      const n = Number(chRaw);
+      const ch = fmtHist(n, 2);
+      if (ch) parts.push(`تغییر: **${n > 0 ? '+' : (n < 0 ? '-' : '')}${ch}٪**`);
+    }
+    if (it.note) parts.push(String(it.note));
+    if (parts.length === 0) return; // داده ناقص هرگز با صفر یا حدس پر نمی‌شود
+    lines.push(`• **${name}:** ${parts.join(' — ')}`);
+  });
+  if (lines.length === 0) return null; // هیچ ردیف معتبری نبود → مسیر پیام صریح نبود داده تاریخی
+  return `🕓 **داده تاریخی «${label}» (بر پایه شواهد تاریخی ارائه‌شده):**\n\n${lines.join('\n')}\n\nاین ارقام فقط از شواهد تاریخی همین درخواست استخراج شده‌اند و هیچ قیمت لحظه‌ای جایگزین آن‌ها نشده است.`;
+}
 const buildConciseMarketStatusResponse = ResponsePresentation.buildConciseMarketStatusResponse;
 const buildWhyResponse = ResponsePresentation.buildWhyResponse;
 
@@ -1725,10 +1797,11 @@ const focusAsset = (asset, mem) => {
    ۱) Temporal Resolver — تشخیص قطعی افق زمانی (بدون ساخت موتور تاریخی/پیش‌بینی)
    -------------------------------------------------------------------------- */
 const TEMPORAL_RULES = [
-  { label: 'TODAY', patterns: ['امروز', 'الان', 'همین حالا', 'این لحظه', 'الان چنده'], horizon: 'CURRENT', rh: false, rf: false },
+  { label: 'TODAY', patterns: ['امروز', 'الان', 'همین حالا', 'این لحظه', 'الان چنده', 'در حال حاضر', 'فعلاً'], horizon: 'CURRENT', rh: false, rf: false },
   { label: 'PAST_WEEK', patterns: ['هفته گذشته', 'هفته قبل', 'هفته پیش', 'هفت روز گذشته', 'هفت روز اخیر', 'سابقه هفته'], horizon: 'HISTORICAL', rh: true, rf: false },
   { label: 'PAST_MONTH', patterns: ['ماه گذشته', 'ماه قبل', 'ماه پیش', 'سی روز گذشته', '۳۰ روز گذشته'], horizon: 'HISTORICAL', rh: true, rf: false },
-  { label: 'YESTERDAY', patterns: ['دیروز', 'پریشب'], horizon: 'HISTORICAL', rh: true, rf: false },
+  { label: 'YESTERDAY', patterns: ['دیروز', 'پریشب', 'روز گذشته', 'روز قبل'], horizon: 'HISTORICAL', rh: true, rf: false },
+  { label: 'PAST_YEAR', patterns: ['سال گذشته', 'سال قبل', 'پارسال'], horizon: 'HISTORICAL', rh: true, rf: false },
   { label: 'END_OF_WEEK', patterns: ['تا آخر هفته', 'تا اخر هفته', 'پایان هفته', 'آخر هفته'], horizon: 'FORECAST', rh: false, rf: true },
   { label: 'END_OF_MONTH', patterns: ['تا آخر ماه', 'پایان ماه', 'آخر ماه'], horizon: 'FORECAST', rh: false, rf: true },
   { label: 'NEXT_WEEK', patterns: ['هفته آینده', 'هفته بعد', 'هفته اینده'], horizon: 'FORECAST', rh: false, rf: true },
@@ -1971,7 +2044,7 @@ const detectScenarioReference = (rawText) => {
 const detectShockFragment = (rawText) => {
   const s = wmNormalize(rawText);
   if (!s) return null;
-  const followUp = /(حالا|بعدش|و اگر|اگر هم|پس اگر|بعد|دوباره|چی میشه|چی می‌شه|چطور)/.test(s);
+  const followUp = /(حالا|بعدش|و اگر|اگر هم|پس اگر|بعد|دوباره|چی میشه|چی می‌شه|چطور|دیگه|دیگر|بازم|باز هم|اضافه)/.test(s);
   const pctMatch = wmToEnDigits(s).match(/(\d+(?:\.\d+)?)\s*(?:درصد|٪|%)/);
   const hasDirectionUp = /(بالا|رشد|افزایش|صعود|جهش|ببره بالا|بره بالا|مثبت)/.test(s);
   const hasDirectionDown = /(پایین|ریزش|افت|کاهش|سقوط|بریزه|منفی|نزول)/.test(s);
@@ -2477,11 +2550,28 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
         let value = null;
         let direction = null;
         let queryText = text.slice(0, 300);
-
+        // FIX-B2-4 (Phase 2-3F-B2): نشانگر ادامه تجمعی («دیگه/بازم/دوباره») برای شوک بعدی همان دارایی
+        const cumulativeMarker = /(دیگه|دیگر|بازم|باز هم|دوباره|اضافه|بیشتر)/.test(wmNormalize(text));
+        let cumulativeApplied = false;
         if (assumptions.length > 0) {
           const a = assumptions[0];
           asset = a.asset; mode = a.mode; value = a.value; direction = a.direction;
           if (replayText) queryText = replayText.slice(0, 300);
+          // FIX-B2-4 (Phase 2-3F-B2): نشانگر «دیگه/بازم/دوباره» با جهت هم‌سو = شوک تجمعی نسبت به سناریوی فعال (+۱۰ و +۵ دیگر → +۱۵)
+          if (cumulativeMarker && activeScenario && activeScenario.mode === 'PERCENT_CHANGE' && asset === activeScenario.asset &&
+              Number.isFinite(Number(activeScenario.value)) && (activeScenario.direction || 'UP') === (direction || 'UP')) {
+            value = Number(activeScenario.value) + Number(value);
+            mode = 'PERCENT_CHANGE';
+            cumulativeApplied = true;
+          }
+          if (cumulativeApplied) {
+            const cumSynth = buildSyntheticScenarioQuery(asset, mode, value, direction || 'UP');
+            if (cumSynth) {
+              queryText = cumSynth.slice(0, 300);
+              const cumCir = analyzeQuery(cumSynth, recentContext, todayEvidence);
+              if (cumCir) resolvedCir = cumCir;
+            }
+          }
         } else if (shockFragment) {
           // پیگیری سناریو: دارایی از فرض فعال یا دارایی‌های فعال؛ جهت از قطعه یا ارث‌بری
           asset = (activeScenario && activeScenario.asset) || mem.activeAssets[0] || null;
@@ -2490,6 +2580,12 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
           direction = shockFragment.hasExplicitDirection
             ? shockFragment.direction
             : ((activeScenario && activeScenario.direction) || 'UP');
+          // FIX-B2-4: جهت هم‌سو + نشانگر «دیگه» = شوک تجمعی نسبت به سناریوی فعال (+۱۰ و +۵ دیگر → +۱۵)
+          if (cumulativeMarker && activeScenario && activeScenario.mode === 'PERCENT_CHANGE' && asset === activeScenario.asset &&
+              Number.isFinite(Number(activeScenario.value)) && (activeScenario.direction || 'UP') === direction) {
+            value = Number(activeScenario.value) + Number(shockFragment.value);
+            cumulativeApplied = true;
+          }
           const synth = asset ? buildSyntheticScenarioQuery(asset, mode, value, direction) : null;
           if (synth) {
             queryText = synth.slice(0, 300);
@@ -2541,7 +2637,9 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
           mem.activeTopic = { kind: 'ASSET', value: asset, source: WM_TRUST.USER_TEXT, trust: WM_TRUST_CLASS[WM_TRUST.USER_TEXT] };
           mem.state = WM_STATES.SCENARIO_CONTEXT;
           if (resolutionPath === 'NO_CONTEXT') {
-            if (shockFragment && parent) {
+            if (cumulativeApplied) {
+              resolutionPath = 'SCENARIO_CUMULATIVE_CONTINUATION';
+            } else if (shockFragment && parent) {
               resolutionPath = shockFragment.hasExplicitDirection ? 'SCENARIO_DIRECTION_OVERRIDE' : 'SCENARIO_CARRY_OVER';
             } else {
               resolutionPath = 'SCENARIO_EXPLICIT';
@@ -2622,6 +2720,22 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
     }
   }
 
+
+  // ── مرحله ۹.۵ (Phase 2-3F-B2): آنافورای «چرا/تحلیل» بدون دارایی صریح → دارایی فعال حافظه کاری (بدون حدس)
+  if (resolutionPath === 'NO_CONTEXT' && explicitEntities.length === 0 && mem.activeAssets.length === 1 &&
+      /(چرا|علت|دلیل|چطور شد)/.test(wmNormalize(text))) {
+    const anaphoraAsset = mem.activeAssets[0];
+    const anaphoraSyn = wmAssetSynonym(anaphoraAsset);
+    const anaphoraReplay = anaphoraSyn ? analyzeQuery(`${text} ${anaphoraSyn}`, recentContext, todayEvidence) : null;
+    if (anaphoraReplay && Array.isArray(anaphoraReplay.entities) && anaphoraReplay.entities.length > 0 && !anaphoraReplay.requiresKnowledge) {
+      resolvedCir = anaphoraReplay;
+      mem.state = mem.state === WM_STATES.SCENARIO_CONTEXT ? WM_STATES.SCENARIO_CONTEXT : WM_STATES.ASSET_CONTEXT;
+      resolutionPath = 'WHY_ANAPHORA_ACTIVE_ASSET';
+      registerResolved('ASSET', anaphoraAsset);
+      semanticSources.push(WM_TRUST.SYSTEM_STATE);
+      notes.push('آنافورای پرسش «چرا» با دارایی فعال حافظه کاری حل شد (بدون حدس دارایی جدید).');
+    }
+  }
   // ── افق زمانی (Temporal) → ثبت در حافظه و انتقال به CIR
   if (temporal.label) {
     mem.timeframe = {
@@ -2637,7 +2751,7 @@ const resolveTurn = (previousMemory, rawText, todayEvidence = {}, deps = {}) => 
   if (resolvedCir && typeof resolvedCir === 'object') {
     resolvedCir = Object.assign({}, resolvedCir, {
       context: Object.assign({}, resolvedCir.context, {
-        isFollowUp: resolutionPath === 'LEGACY_ANAPHORA' || resolutionPath === 'VAGUE_FOLLOWUP_ACTIVE_ASSET' || resolutionPath === 'SCENARIO_CARRY_OVER' || resolutionPath === 'SCENARIO_DIRECTION_OVERRIDE',
+        isFollowUp: resolutionPath === 'LEGACY_ANAPHORA' || resolutionPath === 'VAGUE_FOLLOWUP_ACTIVE_ASSET' || resolutionPath === 'SCENARIO_CARRY_OVER' || resolutionPath === 'SCENARIO_DIRECTION_OVERRIDE' || resolutionPath === 'SCENARIO_CUMULATIVE_CONTINUATION' || resolutionPath === 'WHY_ANAPHORA_ACTIVE_ASSET',
         resolvedFromContext: mem.resolvedReferences.map(r => r.ref),
         resolutionPath,
         state: mem.state,
