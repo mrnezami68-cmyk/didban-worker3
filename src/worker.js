@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3F-B2 (Temporal Safety & Conversational Continuity)';
+const WORKER_PHASE = 'Phase 2-3F-B3 (Knowledge Routing, Intent Isolation & Presentation)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -143,6 +143,7 @@ export default {
         scenarioBinding: 'ENABLED (Phase 2-3E-B Multi-Asset Scenario Binding & Intent Gate v1.0)',
         dataIntegrity: 'ENABLED (Phase 2-3F-B1 Crypto Evidence Normalization & pct24h->change24h Mapping v1.0)',
         temporalSafety: 'ENABLED (Phase 2-3F-B2 Historical No-LIVE-Substitution & Conversational Continuity v1.0)',
+        knowledgeRouting: 'ENABLED (Phase 2-3F-B3 Knowledge Presentation & Correlation Isolation v1.0)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
@@ -303,7 +304,7 @@ export default {
           });
           return new Response(JSON.stringify({
             success: true,
-            reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.',
+            reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.\n\n🧭 **تحلیل جایگزین مجاز (بدون توصیه معاملاتی):**\n• چارچوب: تنوع‌بخشی و مدیریت ریسک شخصی به‌جای تمرکز روی یک دارایی.\n• سناریوی شرطی: «اگر دلار ۱۰٪ بالا برود و اونس ۵٪ رشد کند، طلا چقدر می‌شود؟»\n• تحلیل ساختاری: حباب، اسپرد و نسبت‌های تحلیلی از داده‌های امروز.\n• عدم‌قطعیت: سناریو ≠ پیش‌بینی؛ هیچ مدلی آینده را قطعی نمی‌داند.',
             source: 'ANTI_SIGNAL_GUARD',
             unifiedEvidence: restrictedContract,
             timestamp: new Date().toISOString()
@@ -371,7 +372,7 @@ export default {
         if (queryAnalysis.intent.primary === 'ANTI_SIGNAL_RESTRICTED') {
           return new Response(JSON.stringify({
             success: true,
-            reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.',
+            reply: '⚠️ **تذکر شفاف و سلب مسئولیت مالی:**\nدیدبان هوشمند بازار یک پلتفرم تحلیلی، آماری و پژوهشی است و تحت هیچ عنوان سیگنال معاملاتی، نقطه ورود/خروج، تارگت قیمتی یا پیشنهاد خرید و فروش صادر نمی‌کند.\n\nتوصیه می‌شود بر اساس استراتژی مدیریت ریسک شخصی، ضرایب همبستگی دارایی‌ها و سناریوهای احتمالاتی تصمیم‌گیری فرمایید.\n\n🧭 **تحلیل جایگزین مجاز (بدون توصیه معاملاتی):**\n• چارچوب: تنوع‌بخشی و مدیریت ریسک شخصی به‌جای تمرکز روی یک دارایی.\n• سناریوی شرطی: «اگر دلار ۱۰٪ بالا برود و اونس ۵٪ رشد کند، طلا چقدر می‌شود؟»\n• تحلیل ساختاری: حباب، اسپرد و نسبت‌های تحلیلی از داده‌های امروز.\n• عدم‌قطعیت: سناریو ≠ پیش‌بینی؛ هیچ مدلی آینده را قطعی نمی‌داند.',
             source: 'ANTI_SIGNAL_GUARD',
             interpretation: formatStructuredLog(queryAnalysis),
             unifiedEvidence: buildUnifiedEvidenceContract({ query: userMsg, cir: queryAnalysis, rawEvidence: {} }),
@@ -447,6 +448,24 @@ export default {
               success: true,
               reply: degradedReply,
               source: 'TIMEFRAME_CAPABILITY_GUARD',
+              responseLevel: RESPONSE_LEVELS.STANDARD,
+              interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+              retrievedKnowledge,
+              unifiedEvidence: unifiedEvidenceContract,
+              timestamp: new Date().toISOString()
+            }), { headers: corsHeaders });
+          }
+        }
+
+        // ۳.۸. ارائه دانشنامه (Phase 2-3F-B3): شاخه اختصاصی KNOWLEDGE — بدون حدس و بدون داده بازار
+        if ((queryAnalysis.requiresKnowledge || queryAnalysis.intent.primary === 'KNOWLEDGE_QUERY' || queryAnalysis.knowledgeQuery) && !detectWhyQuery(userMsg)) {
+          const knowledgeReply = buildKnowledgePresentationResponse(retrievedKnowledge, queryAnalysis);
+          if (knowledgeReply) {
+            const knowledgeMatched = !!(retrievedKnowledge && retrievedKnowledge.meta && retrievedKnowledge.meta.matched);
+            return new Response(JSON.stringify({
+              success: true,
+              reply: sanitizeUserFacingResponse(knowledgeReply, { technical: isTechnicalRequest }),
+              source: knowledgeMatched ? 'KNOWLEDGE_PRESENTATION' : 'KNOWLEDGE_ENTRY_MISSING',
               responseLevel: RESPONSE_LEVELS.STANDARD,
               interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
               retrievedKnowledge,
@@ -546,7 +565,7 @@ export default {
               responseLevel: requestLevel,
               isWhyQuestion,
               isTechnicalRequest
-            });
+            }, retrievedKnowledge);
             const chatMessages = [
               { role: 'system', content: chatSystemPrompt },
               ...history.slice(-4).map(h => ({
@@ -733,12 +752,23 @@ const KNOWLEDGE_TOPICS = {
   'GOLD_TO_SILVER': ['نسبت طلا به نقره', 'طلا به نقره', 'xau/xag', 'xau xag', 'نسبت اونس طلا به نقره'],
   'GOLD_ETF': ['صندوق طلا', 'صندوق های طلا', 'صندوق‌های طلا', 'صندوق عیار', 'صندوق کهربا', 'صندوق زرفام', 'صندوق کالایی طلا', 'gold etf'],
   'COIN_VS_TOKEN': ['تفاوت کوین و توکن', 'فرق کوین و توکن', 'کوین یا توکن', 'کوین و توکن'],
+  'HALVING': ['هاوینگ بیت کوین', 'هاوینگ بیت‌کوین', 'هاوینگ', 'halving', 'نصف شدن پاداش بلوک', 'نصف شدن پاداش'],
   'BROKER_VS_BROKERAGE': ['تفاوت کارگزاری و بروکر', 'فرق کارگزاری و بروکر', 'کارگزاری یا بروکر', 'کارگزاری و بروکر'],
   'GOLD18_BUBBLE_CORRIDOR': ['حباب طلای ۱۸', 'حباب ۱۸ عیار', 'کریدور تعادلی طلا', 'دامنه تعادلی طلا', 'اشباع خرید طلا'],
   'QUARTER_COIN_BUBBLE': ['حباب ربع سکه', 'حباب ربع‌سکه', 'ربع سکه'],
   'SIDEWAYS_MARKET': ['بازار ساید', 'روند ساید', 'حرکت ساید', 'سایدوی', 'بازار رنج', 'کانال رنج', 'رنج‌باند', 'درجا زدن', 'درجا زدن قیمت', 'ساید یعنی', 'رنج یعنی', 'ساید چیست', 'بازار رنج چیست'],
   'PRICE_CONSOLIDATION': ['تثبیت قیمت', 'تثبیت در محدوده', 'تثبیت نرخ', 'فاز تثبیت', 'کنسولیدیشن', 'consolidation']
 };
+
+// Phase 2-3F-B3: تطبیق مرزدار مترادف‌های لاتین (ضد نشت زیررشته‌ای مانند 'sol' در 'consolidation')
+function entitySynonymHit(text, syn) {
+  const s = String(text || '');
+  const needle = String(syn || '').toLowerCase();
+  if (!needle) return false;
+  if (!/^[a-z0-9.]+$/.test(needle)) return s.includes(needle);
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('(^|[^a-z0-9])' + esc + '($|[^a-z0-9])', 'i').test(s);
+}
 
 function extractEntities(text) {
   if (!text) return [];
@@ -749,7 +779,7 @@ function extractEntities(text) {
   for (const key of priorityKeys) {
     const synonyms = ASSET_TAXONOMY[key];
     for (const syn of synonyms) {
-      if (s.includes(syn)) {
+      if (entitySynonymHit(s, syn)) {
         detected.push({ type: 'ASSET', value: key, raw: syn });
         break;
       }
@@ -1200,7 +1230,7 @@ const MakanIdentityProfile = (() => {
 })();
 
 const ResponsePresentation = (() => {
-  const RP_VERSION = '1.0';
+  const RP_VERSION = '1.1';
 
   const RP_LEVELS = {
     SHORT: 'SHORT',
@@ -1252,6 +1282,7 @@ const ResponsePresentation = (() => {
     .replace(/[\u200c\u200e\u200f]/g, ' ')
     .replace(/ي/g, 'ی')
     .replace(/ك/g, 'ک')
+    .replace(/؟/g, '?')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -1535,7 +1566,7 @@ const ResponsePresentation = (() => {
         lines.push(`• **${assetLabel(asset)}:** داده لحظه‌ای در دسترس نیست.`);
         return;
       }
-      const unit = item.unit === 'USD' ? 'دلار' : (item.unit === 'USD_PER_OUNCE' ? 'دلار' : (item.unit === 'INDEX_POINT' ? 'واحد' : 'تومان'));
+      const unit = assetUnit(item);
       const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
       let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} ${unit}**`;
       const chRaw = item.metadata ? item.metadata.change24h : null;
@@ -1566,12 +1597,39 @@ const ResponsePresentation = (() => {
         • هیچ علت قطعی بدون شاهد ادعا نمی‌شود؛ اعداد فقط از شواهد زنده می‌آیند.
      ========================================================================== */
 
+  // Phase 2-3F-B3: واحد نمایشی دارایی بر پایه قرارداد داده (بدون محاسبه)
+  const assetUnit = (item) => {
+    const u = item ? item.unit : null;
+    if (u === 'USD' || u === 'USD_PER_OUNCE') return 'دلار';
+    if (u === 'INDEX_POINT') return 'واحد';
+    return 'تومان';
+  };
+
+  // Phase 2-3F-B3: محرک‌های محتمل به‌تفکیک کلاس دارایی (فرضیه‌های عمومی، بدون داده روند)
+  const WHY_DRIVERS = {
+    USD: 'نوسان عرضه و تقاضای ارز، انتظارات تورمی، رویدادهای خبری و اسپرد بازار',
+    USDT: 'اضافه‌تقاضای خروج نقدینگی، اسپرد دلار کاغذی/دیجیتال و شرایط انتقال',
+    GOLD18: 'بردار دوگانه نرخ ارز و اونس جهانی، تقاضای فیزیکی/فصلی و حباب داخلی',
+    COIN: 'ارزش ذاتی بر پایه اونس و ارز، حباب مسکوکات و تقاضای خرد/کادویی',
+    XAU: 'نرخ بهره و انتظارات تورمی جهانی، شاخص دلار و تقاضای پناهگاهی',
+    XAG: 'تقاضای صناعی، نسبت طلا به نقره و چرخه‌های رشد صنعتی',
+    OIL: 'عرضه اوپک، تقاضای جهانی و ریسک‌های ژئوپلیتیک',
+    TSE_INDEX: 'جریان نقدینگی حقیقی/حقوقی، ارز نیما و عملکرد صنایع دلاری',
+    TSE_EQUAL: 'عمق نقدینگی خرد، بازگشت اعتماد عمومی و صنایع ریالی',
+    BTC: 'جریان نقدینگی کریپتو، دامیننس و رویدادهای عرضه (هاوینگ)، احساسات بازار',
+    ETH: 'نقدینگی DeFi، به‌روزرسانی‌های شبکه و چرخه نقدینگی آلت‌کوین‌ها',
+    SOL: 'حجم اکوسیستم، حساسیت به چرخه ریسک و نقدینگی آلت‌کوین‌ها',
+    DEFAULT: 'بردار ارز، انتظارات تورمی، جریان نقدینگی و رویدادهای بازار'
+  };
+  const whyDrivers = (asset) => WHY_DRIVERS[String(asset || '').toUpperCase()] || WHY_DRIVERS.DEFAULT;
+
   const buildWhyResponse = (cir = {}, liveItems = []) => {
     const entities = (cir && Array.isArray(cir.entities)) ? cir.entities.map((e) => e.value) : [];
     const items = Array.isArray(liveItems) ? liveItems : [];
     const target = entities.length > 0 ? entities.slice(0, 2) : [];
 
     const obsLines = [];
+    let maxAbsChange = null;
     target.forEach((asset) => {
       const item = items.find((x) => x && x.asset === asset);
       if (!item || item.value === null || item.value === undefined || item.value === '' || !Number.isFinite(Number(item.value))) {
@@ -1579,12 +1637,13 @@ const ResponsePresentation = (() => {
         return;
       }
       const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
-      let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} تومان**`;
+      let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} ${assetUnit(item)}**`;
       const chRaw = item.metadata ? item.metadata.change24h : null;
       const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
       if (ch !== null) {
         const sign = ch > 0 ? '+' : (ch < 0 ? '-' : ''); // FIX-B1-4: حفظ علامت کاهش (formatter فقط قدر مطلق است)
         const flat = Math.abs(ch) < 0.05;
+        if (maxAbsChange === null || Math.abs(ch) > maxAbsChange) maxAbsChange = Math.abs(ch);
         line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**${flat ? ' (عملاً بدون تغییر محسوس)' : ''}`;
       }
       obsLines.push(line);
@@ -1595,19 +1654,149 @@ const ResponsePresentation = (() => {
       : 'برای دارایی موردپرسش، داده لحظه‌ای کافی در دسترس نیست.';
 
     const assetsText = target.length > 0 ? target.map((a) => assetLabel(a)).join(' و ') : 'دارایی موردپرسش';
+    const flatToday = (maxAbsChange === null || maxAbsChange < 0.05);
+    const driverLines = (target.length > 0 ? target : [null]).map((a) =>
+      `• **${a ? assetLabel(a) : assetsText}:** محرک‌های رایج این بازار (${whyDrivers(a)}) تنها با روند چندروزه/داده تاریخی قابل تفکیک‌اند.\n`
+    ).join('');
 
     return `🔎 **مشاهده (فقط بر پایه داده امروز):**\n` +
       `${observation}\n\n` +
       `🧭 **محرک‌های محتمل — فقط در چارچوب شواهد:**\n` +
       `• تعیین یک علت واحد برای رفتار امروز «${assetsText}» با داده‌های لحظه‌ای (قیمت و تغییر روزانه) ممکن نیست؛\n` +
-      `  محرک‌های رایج این بازار (نوسان ارز، اونس جهانی، تقاضای فیزیکی/فصلی، انتظارات و اسپرد معاملاتی) تنها با روند چندروزه قابل تفکیک‌اند.\n\n` +
+      driverLines +
+      `\n` +
       `⚖️ **قدرت شاهد:** پایین تا متوسط — داده لحظه‌ای «چیستی» حرکت را نشان می‌دهد، نه «چرایی» آن.\n\n` +
-      `🧠 **تفسیر اقتصادی:** رفتار نزدیک به ثابت معمولاً محصول تعادل عرضه و تقاضا یا تثبیت موقت انتظارات است؛ اما بدون داده تاریخی، این یک فرضیه است، نه یافته.\n\n` +
+      `🧠 **تفسیر اقتصادی:** ${flatToday ? 'رفتار نزدیک به ثابت معمولاً محصول تعادل عرضه و تقاضا یا تثبیت موقت انتظارات است' : 'تغییر روزانه در این دامنه معمولاً محصول ترکیب بردار ارز/کامودیتی، انتظارات و جریان نقدینگی است'}؛ اما بدون داده تاریخی، این یک فرضیه است، نه یافته.\n\n` +
       `❓ **عدم‌قطعیت:** از داده‌های فعلی نمی‌توان علت قطعی تعیین کرد؛ برای تحلیل علت‌محور، در دسترس بودن روند تاریخی و رویدادهای بازار لازم است.`;
+  };
+
+
+  /* ==========================================================================
+     ۹) Phase 2-3F-B3: ارائه دانشنامه، مقایسه دارایی‌ها، کارت تک‌دارایی و پاسخ دامنه‌ای
+        • قطعی و بدون تولید محتوای ساختگی؛ دانش فقط از ردیف‌های بازیابی‌شده D1.
+     ========================================================================== */
+
+  const KNOWLEDGE_TOPIC_LABELS = {
+    'P/E': 'نسبت قیمت به سود (P/E)',
+    'CPI': 'شاخص قیمت مصرف‌کننده (CPI)',
+    'DXY': 'شاخص دلار (DXY)',
+    'PMI': 'شاخص مدیران خرید (PMI)',
+    'GOLD_TO_SILVER': 'نسبت طلا به نقره',
+    'GOLD_ETF': 'صندوق‌های طلای بورسی',
+    'COIN_VS_TOKEN': 'تفاوت کوین و توکن',
+    'BROKER_VS_BROKERAGE': 'تفاوت کارگزاری و بروکر',
+    'GOLD18_BUBBLE_CORRIDOR': 'کریدور تعادلی طلای ۱۸ عیار',
+    'QUARTER_COIN_BUBBLE': 'حباب ربع سکه',
+    'SIDEWAYS_MARKET': 'بازار ساید/رنج',
+    'PRICE_CONSOLIDATION': 'تثبیت قیمت (Consolidation)',
+    'HALVING': 'هاوینگ بیت‌کوین',
+    'GENERAL_FINANCE': 'مفاهیم عمومی مالی'
+  };
+
+  const KNOWLEDGE_PRESENT_MIN_SCORE = 0.70;
+
+  const trimKnowledgeContent = (content) => {
+    const raw = String(content || '');
+    if (!raw) return '';
+    const lines = raw.split('\n')
+      .map(l => l.trim())
+      .filter(l => l && !l.includes('$$') && !l.includes('\\frac') && !l.includes('\\text') && !l.includes('\\quad'));
+    let out = lines.join('\n');
+    if (out.length > 900) {
+      out = out.slice(0, 900);
+      const cut = out.lastIndexOf('\n');
+      if (cut > 300) out = out.slice(0, cut);
+      out = out.trim() + ' …';
+    }
+    return out;
+  };
+
+  const buildKnowledgePresentationResponse = (retrievedKnowledge, cir = {}) => {
+    const results = (retrievedKnowledge && Array.isArray(retrievedKnowledge.results)) ? retrievedKnowledge.results : [];
+    const topic = (retrievedKnowledge && retrievedKnowledge.query && retrievedKnowledge.query.topic) || null;
+    const topicFa = KNOWLEDGE_TOPIC_LABELS[topic] || 'این مفهوم';
+    const best = results.find(r => Number(r.relevanceScore) >= KNOWLEDGE_PRESENT_MIN_SCORE) || null;
+    if (!best) {
+      return `📚 **دانشنامه دیدبان — مدخلی برای «${topicFa}» یافت نشد.**\n\n` +
+        `این پرسش یک استعلام مفهومی است؛ در دانشنامه داخلی مدخل متناظری برای آن در دسترس نیست و عمداً هیچ توضیح ساختگی تولید نمی‌شود.\n\n` +
+        `💡 **چارچوب تحلیل پیشنهادی:** می‌توانید درباره «همبستگی دارایی‌ها»، «حباب و اسپرد»، «نسبت‌های تحلیلی» یا یک «سناریوی فرضی مشخص» بپرسید تا تحلیل ساختاری (غیرتوصیه‌ای) دریافت کنید.`;
+    }
+    const body = trimKnowledgeContent(best.content);
+    return `📚 **دانشنامه دیدبان — «${best.title}»**\n\n` +
+      `${best.summary || ''}` +
+      (body ? `\n\n${body}` : '') +
+      `\n\n🧾 *منبع: دانشنامه داخلی دیدبان (D1) — این پاسخ تقریر مفهوم است و توصیه معاملاتی نیست.*`;
+  };
+
+  const buildComparisonResponse = (cir = {}, liveItems = []) => {
+    const entities = (cir && Array.isArray(cir.entities)) ? cir.entities.map((e) => e.value) : [];
+    const target = entities.slice(0, 3);
+    if (target.length < 2) return null;
+    const items = Array.isArray(liveItems) ? liveItems : [];
+    const lines = [];
+    target.forEach((asset) => {
+      const item = items.find((x) => x && x.asset === asset);
+      if (!hasLiveValue(item)) {
+        lines.push(`• **${assetLabel(asset)}:** داده لحظه‌ای در دسترس نیست.`);
+        return;
+      }
+      const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
+      let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} ${assetUnit(item)}**`;
+      const chRaw = item.metadata ? item.metadata.change24h : null;
+      const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
+      if (ch !== null) {
+        const sign = ch > 0 ? '+' : (ch < 0 ? '-' : '');
+        line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**`;
+      }
+      lines.push(line);
+    });
+    const labels = target.map(a => assetLabel(a)).join(' و ');
+    return `⚖️ **مقایسه توصیفی ${labels} (بر پایه شواهد امروز):**\n\n` +
+      lines.join('\n') +
+      `\n\n🧾 *این مقایسه فقط توصیف داده‌های امروز است؛ شامل پیش‌بینی، ادعای علّیت یا توصیه معاملاتی نیست.*`;
+  };
+
+  const buildAssetSnapshotResponse = (cir = {}, liveItems = []) => {
+    const entities = (cir && Array.isArray(cir.entities)) ? cir.entities.map((e) => e.value) : [];
+    if (entities.length !== 1) return null;
+    const asset = entities[0];
+    const items = Array.isArray(liveItems) ? liveItems : [];
+    const item = items.find((x) => x && x.asset === asset);
+    if (!hasLiveValue(item)) {
+      return `⚠️ **داده لحظه‌ای «${assetLabel(asset)}» در دسترس نیست.**\n\n` +
+        `برای تحلیل دقیق، لطفاً همان دارایی را با شواهد تازه دوباره بپرسید (مثلاً «قیمت ${assetLabel(asset)} چنده؟»).`;
+    }
+    const decimals = Math.abs(Number(item.value)) >= 1000 ? 0 : 2;
+    let line = `• **${assetLabel(asset)}:** **${fmtNumber(item.value, decimals)} ${assetUnit(item)}**`;
+    const chRaw = item.metadata ? item.metadata.change24h : null;
+    const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
+    if (ch !== null) {
+      const sign = ch > 0 ? '+' : (ch < 0 ? '-' : '');
+      line += ` — تغییر روزانه: **${sign}${fmtNumber(ch, 2)}٪**`;
+    }
+    return `📊 **نگاه توصیفی به ${assetLabel(asset)}:**\n\n` + line +
+      `\n\nبرای ادامه می‌توانید بپرسید: «چرا امروز حرکت کرد؟» یا «اگر ۱۰٪ بالا برود چه می‌شود؟»`;
+  };
+
+  const buildScopeFallbackResponse = (query = '') => {
+    return `🧭 **این درخواست در قالب‌های تحلیلی شناخته‌شده قرار نمی‌گیرد.**\n\n` +
+      `برای پاسخ دقیق و مستند، یکی از این قالب‌ها را بپرسید:\n` +
+      `• وضعیت دارایی: «قیمت دلار چنده؟»\n` +
+      `• مفهومی: «نسبت قیمت به سود چیست؟»\n` +
+      `• سناریویی: «اگر دلار ۱۰٪ بالا برود چه می‌شود؟»\n` +
+      `• علت حرکت: «چرا طلا بالا رفت؟»\n` +
+      `• مقایسه: «دلار و طلا را مقایسه کن»`;
   };
 
   return {
     buildWhyResponse,
+    buildKnowledgePresentationResponse,
+    buildComparisonResponse,
+    buildAssetSnapshotResponse,
+    buildScopeFallbackResponse,
+    trimKnowledgeContent,
+    assetUnit,
+    KNOWLEDGE_TOPIC_LABELS,
     RP_VERSION,
     RP_LEVELS,
     ASSET_LABELS,
@@ -1673,6 +1862,10 @@ function buildHistoricalEvidenceResponse(cir = {}, historicalItems = []) {
   return `🕓 **داده تاریخی «${label}» (بر پایه شواهد تاریخی ارائه‌شده):**\n\n${lines.join('\n')}\n\nاین ارقام فقط از شواهد تاریخی همین درخواست استخراج شده‌اند و هیچ قیمت لحظه‌ای جایگزین آن‌ها نشده است.`;
 }
 const buildConciseMarketStatusResponse = ResponsePresentation.buildConciseMarketStatusResponse;
+const buildKnowledgePresentationResponse = ResponsePresentation.buildKnowledgePresentationResponse;
+const buildComparisonResponse = ResponsePresentation.buildComparisonResponse;
+const buildAssetSnapshotResponse = ResponsePresentation.buildAssetSnapshotResponse;
+const buildScopeFallbackResponse = ResponsePresentation.buildScopeFallbackResponse;
 const buildWhyResponse = ResponsePresentation.buildWhyResponse;
 
 // سقف توکن پاسخ بر اساس سیاست طول (SHORT / STANDARD / DEEP)
@@ -2884,9 +3077,42 @@ const TOPIC_TO_ID_MAP = {
   'LEVERAGE_FUNDS': ['leverage_fund_risk'],
   'BOURSE_FUNDS': ['bourse_funds_types'],
   'OIL_GOLD_CORRELATION': ['oil_gold_correlation'],
+  'HALVING': ['bitcoin_fundamentals'],
   'SIDEWAYS_MARKET': ['sideways_market_dynamics', 'sideways_market'],
   'PRICE_CONSOLIDATION': ['price_consolidation_regimes', 'price_consolidation']
 };
+
+// Phase 2-3F-B3: تطبیق کلیدواژه مرزدار (حداقل طول ۴) به‌جای زیررشته آزاد
+function kwHit(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const short = a.length <= b.length ? a : b;
+  const long = a.length <= b.length ? b : a;
+  if (short.length < 4) return false;
+  const idx = long.indexOf(short);
+  if (idx === -1) return false;
+  const before = idx === 0 ? ' ' : long[idx - 1];
+  const after = idx + short.length >= long.length ? ' ' : long[idx + short.length];
+  const boundary = /[\s،,؛;:.!?()«»"'\/\-]/;
+  return boundary.test(before) && boundary.test(after);
+}
+
+// Phase 2-3F-B3: خلاصه‌سازی قطعی محتوای دانشنامه برای ارائه (حذف فرمول‌ها)
+function trimKnowledgeRowContent(content) {
+  const raw = String(content || '');
+  if (!raw) return '';
+  const lines = raw.split('\n')
+    .map(l => l.trim())
+    .filter(l => l && !l.includes('$$') && !l.includes('\\frac') && !l.includes('\\text') && !l.includes('\\quad'));
+  let out = lines.join('\n');
+  if (out.length > 900) {
+    out = out.slice(0, 900);
+    const cut = out.lastIndexOf('\n');
+    if (cut > 300) out = out.slice(0, cut);
+    out = out.trim() + ' …';
+  }
+  return out;
+}
 
 function scoreKnowledgeItem(item, query = {}) {
   if (!item) return { score: 0, reasons: [] };
@@ -2919,7 +3145,7 @@ function scoreKnowledgeItem(item, query = {}) {
 
   let keywordMatched = false;
   for (const kw of queryKeywords) {
-    if (itemKeywords.some(ik => ik === kw || ik.includes(kw) || kw.includes(ik))) {
+    if (itemKeywords.some(ik => kwHit(ik, kw))) {
       keywordMatched = true;
       break;
     }
@@ -3019,6 +3245,7 @@ async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
           title: item.title,
           category: item.category,
           summary: item.summary,
+          content: trimKnowledgeRowContent(item.content),
           relevanceScore: score,
           matchReasons: reasons
         });
@@ -4262,6 +4489,15 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
   if (typeof detectWhyQuery === 'function' && detectWhyQuery(userQuery)) {
     return buildWhyResponse(queryAnalysis || {}, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
   }
+  // FIX-B3-C (Phase 2-3F-B3): مقایسه توصیفی دو دارایی — شاخه اختصاصی پیش از بلوک همبستگی (رفع hijack)
+  {
+    const _cmpEntities = (queryAnalysis && Array.isArray(queryAnalysis.entities)) ? queryAnalysis.entities : [];
+    const _qEarly = String(userQuery || '').toLowerCase();
+    if (_cmpEntities.length >= 2 && (_qEarly.includes('مقایسه') || _qEarly.includes('در برابر') || _qEarly.includes('نسبت به'))) {
+      const comparisonReply = buildComparisonResponse(queryAnalysis, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
+      if (comparisonReply) return comparisonReply;
+    }
+  }
   const norm = normalizedEvidence || normalizeEvidenceMap(todayEvidence);
   const q = String(userQuery || '').toLowerCase();
 
@@ -4377,7 +4613,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
   const isDirectConceptQuery = q.includes('چیست') || q.includes('تفاوت') || q.includes('فرمول') || q.includes('تعریف');
   const isScenarioQuery = q.includes('سناریو') || q.includes('چهارگانه') || q.includes('شواهد ساختاری') || q.includes('برداشت آماری') || q.includes('چشم‌انداز') || q.includes('پیش‌بینی') || q.includes('آینده') || q.includes('رژیم');
   const isBubbleQuery = q.includes('حباب') || q.includes('سکه') || q.includes('آب‌شده') || q.includes('آب شده') || q.includes('مثقال') || q.includes('مسکوک');
-  const isCorrelationQuery = q.includes('همبستگی') || q.includes('دلار') || q.includes('طلا') || q.includes('واگرایی') || q.includes('تتر') || q.includes('اسپرد') || q.includes('ارز') || q.includes('اونس');
+  const isCorrelationQuery = q.includes('همبستگی') || q.includes('واگرایی') || q.includes('اسپرد') || q.includes('پیرسون') || q.includes('هم‌حرکت') || q.includes('هم راستا');
   const isBourseQuery = q.includes('بورس') || q.includes('شاخص') || q.includes('سهام') || q.includes('هم‌وزن') || q.includes('هم وزن');
   const isCommodityQuery = q.includes('نقره') || q.includes('نفت') || q.includes('کامودیتی') || q.includes('نسبت طلا به نقره') || q.includes('فلزات') || (q.includes('طلا') && q.includes('نقره'));
   const isPortfolioQuery = q.includes('سبد') || q.includes('تخصیص') || q.includes('تقسیم') || q.includes('سهم دارایی') || q.includes('پورتفوی') || q.includes('چقدر طلا') || q.includes('چند درصد');
@@ -4630,7 +4866,7 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
           `   طلای ۱۸ عیار با وجود افت ارز، به دلیل تقویت اونس جهانی به سطح **${fmtFa(xau.price)} دلار** (${fmtFa(xau.change, 2)}٪) رشد کرده است.`;
       } else {
         divAnalysis = `\n• **🔍 وضعیت هماهنگی امروز:**\n` +
-          `   دلار آزاد (${usd.change >= 0 ? '+' : ''}${fmtFa(usd.change, 2)}٪) و طلای ۱۸ عیار (${gold18.change >= 0 ? '+' : ''}${fmtFa(gold18.change, 2)}٪) حرکتی هم‌راستا با ساختار همبستگی تاریخی ثبت کرده‌اند.`;
+          `   دلار آزاد (${usd.change >= 0 ? '+' : ''}${fmtFa(usd.change, 2)}٪) و طلای ۱۸ عیار (${gold18.change >= 0 ? '+' : ''}${fmtFa(gold18.change, 2)}٪) حرکتی هم‌راستا (هم‌مسیر) با یکدیگر ثبت کرده‌اند.`;
       }
     }
 
@@ -4642,10 +4878,11 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     }
 
     return `📈 **تحلیل کمّی و ساختاری همبستگی بازارها و واگرایی دارایی‌ها:**\n\n` +
-      `• **همبستگی تاریخی دارایی‌ها (هم‌حرکتی آماری):**\n` +
-      `   - همبستگی طلای ۱۸ عیار با دلار آزاد: **+۰٫۹۴** (هم‌حرکتی مستقیم بسیار قدرتمند).\n` +
-      `   - همبستگی تتر با دلار کاغذی: **+۰٫۹۸** (انطباق کامل با انحراف اسپرد دوره‌ای).\n` +
-      `   - همبستگی طلای ۱۸ عیار با اونس جهانی طلا: **+۰٫۶۵** (تعدیل دوگانه بردار ارز و اونس).` +
+      `• **همبستگی تاریخی دارایی‌ها — هم‌حرکتی آماری (ضرایب مرجع Illustrative؛ پارامتر تحلیلی ثابت، نه محاسبه‌شده از سری زمانی):**\n` +
+      `   - همبستگی طلای ۱۸ عیار با دلار آزاد: **+۰٫۹۴** (ضریب مرجع ثابت — هم‌حرکتی مستقیم بسیار قدرتمند).\n` +
+      `   - همبستگی تتر با دلار کاغذی: **+۰٫۹۸** (ضریب مرجع ثابت — انطباق با انحراف اسپرد دوره‌ای).\n` +
+      `   - همبستگی طلای ۱۸ عیار با اونس جهانی طلا: **+۰٫۶۵** (ضریب مرجع ثابت — تعدیل دوگانه بردار ارز و اونس).\n` +
+      `   - *این ضرایب پارامترهای تحلیلی مرجع (Illustrative) هستند و از سری زمانی تاریخی/زنده محاسبه نشده‌اند؛ محاسبه ضریب پیرسون واقعی نیازمند داده تاریخی است.*` +
       divAnalysis +
       spreadAnalysis +
       `\n\n• **برابری مظنه مثقال طلای ۱۷ عیار آب‌شده:** **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا).`;
@@ -4705,7 +4942,17 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
       `   - صعود سریع‌تر شاخص هم‌وزن = بازگشت اعتماد عمومی نقدینگی خرد به کلیت تابلوی بورس.`;
   }
 
-  // ۸. پاسخ عمومی چندبعدی در صورت سوالات ترکیبی یا عمومی
+  // ۸. پاسخ عمومی چندبعدی فقط برای پرسش‌های صریحاً کلان/چنددارایی (Phase 2-3F-B3)
+  const _snapEntities = (queryAnalysis && Array.isArray(queryAnalysis.entities)) ? queryAnalysis.entities : [];
+  const _broadIntent = /(وضعیت کلی|خلاصه|مرور|تابلو|همه بازار|بازارها|جمع‌بندی|چندبعدی)/.test(q) || _snapEntities.length >= 3;
+  if (_snapEntities.length === 1) {
+    const snapshotReply = buildAssetSnapshotResponse(queryAnalysis, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
+    if (snapshotReply) return snapshotReply;
+  }
+  if (!_broadIntent) {
+    return buildScopeFallbackResponse(userQuery);
+  }
+
   return `💡 **${identityRoleLine()}:**\n\n` +
     `درخواست شما درباره «${userQuery}» ارزیابی شد. خلاصه موازنه چندبعدی تابلوی فعال:\n\n` +
     `• **بازار ارز:** دلار آزاد **${fmtFa(usd.price)} تومان** | تتر **${fmtFa(usdt.price)} تومان** (اسپرد: **${fmtFa(usdtSpreadPct, 2)}٪**)\n` +
@@ -4963,11 +5210,18 @@ function isNumberInAllowedSet(targetNum, allowedSet, tolerance = 0.08) {
 // مهندسی پرامپت ساختاریافته (Prompt Engineering)
 // ============================================================================
 
-function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null, presentation = {}) {
+function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null, presentation = {}, retrievedKnowledge = null) {
   const evSummary = JSON.stringify(todayEvidence, null, 2);
   const responseLevel = presentation.responseLevel || 'STANDARD';
   const isWhy = presentation.isWhyQuestion === true;
   const isTechnical = presentation.isTechnicalRequest === true;
+
+  let knowledgeConstraint = '';
+  if (retrievedKnowledge && retrievedKnowledge.meta && retrievedKnowledge.meta.matched && Array.isArray(retrievedKnowledge.results) && retrievedKnowledge.results.length > 0) {
+    const kRows = retrievedKnowledge.results.slice(0, 2);
+    knowledgeConstraint = `\nدانشنامه داخلی دیدبان (تنها منبع مجاز برای پاسخ مفهومی؛ اگر متن کافی نیست صریح بگو):\n` +
+      kRows.map((r, i) => `${i + 1}. «${r.title}» — ${r.summary || ''}${r.content ? ' | ' + String(r.content).slice(0, 600) : ''}`).join('\n') + `\n`;
+  }
   let analysisConstraint = '';
   if (queryAnalysis && queryAnalysis.intent) {
     analysisConstraint = `\n۵. ساختار تحلیل نیت و اهداف استعلام کاربر:
@@ -5000,7 +5254,7 @@ function buildAdvisorChatSystemPrompt(todayEvidence = {}, queryAnalysis = null, 
    - DEEP: تحلیل ساختاریافته با بخش‌های مشخص، اما بدون اطناب غیرضروری و فقط با شواهد مرتبط.
 ${isWhy ? '۷. این پرسش از نوع «چرا» است: علت را فقط در صورت وجود شاهد مطرح کن و صریح تفکیک کن چه چیزی مشاهده است و چه چیزی استنباط محتمل.\n' : ''}${isTechnical ? '۷. کاربر صریحاً پرسش فنی/محاسباتی پرسیده است؛ در این حالت توضیح روش محاسبه و ضرایب مجاز است.\n' : ''}۸. داده‌های زنده تابلوی بازار امروز جهت ارجاع (فقط برای همین پاسخ):
 ${evSummary}
-${analysisConstraint}
+${analysisConstraint}${knowledgeConstraint}
 پاسخ را به زبان فارسی روان، بدون ذکر جزئیات پیاده‌سازی، ارائه دهید.`;
 }
 
