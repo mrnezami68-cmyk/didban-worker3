@@ -22,7 +22,7 @@
 'use strict';
 
 const WORKER_VERSION = 'v3.0.0-ai-interpreter';
-const WORKER_PHASE = 'Phase 2-3F-B3-KH (Knowledge Retrieval & Presentation Hardening)';
+const WORKER_PHASE = 'Phase 2-3F-B3-KB (Knowledge Base Completion & Coverage)';
 
 // حافظه کش درون‌رم در لبه (In-Memory Edge Cache)
 const edgeMemoryCache = new Map();
@@ -145,6 +145,7 @@ export default {
         temporalSafety: 'ENABLED (Phase 2-3F-B2 Historical No-LIVE-Substitution & Conversational Continuity v1.0)',
         knowledgeRouting: 'ENABLED (Phase 2-3F-B3-KH Knowledge Retrieval & Presentation Hardening v1.1)',
         knowledgeHardening: 'ENABLED (Phase 2-3F-B3-KH KH-01..KH-06 Canonical Relevance Policy & Boundary Safety v1.0)',
+        knowledgeCoverage: 'ENABLED (Phase 2-3F-B3-KB Knowledge Base Completion & Coverage v1.0 — P0/P1/P2 + Market Structure, 34 canonical entries)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
@@ -765,7 +766,16 @@ const KNOWLEDGE_TOPICS = {
   'QUARTER_COIN_BUBBLE': ['حباب ربع سکه', 'حباب ربع‌سکه', 'ربع سکه'],
   'SIDEWAYS_MARKET': ['بازار ساید', 'روند ساید', 'حرکت ساید', 'سایدوی', 'بازار رنج', 'کانال رنج', 'رنج‌باند', 'درجا زدن', 'درجا زدن قیمت', 'ساید یعنی', 'رنج یعنی', 'ساید چیست', 'بازار رنج چیست', 'بازار خنثی', 'فلت'],
   'PRICE_CONSOLIDATION': ['تثبیت قیمت', 'تثبیت در محدوده', 'تثبیت نرخ', 'فاز تثبیت', 'کنسولیدیشن', 'کانسولیدیشن', 'consolidation'],
-  'CEX_DEX': ['cex و dex', 'تفاوت cex و dex', 'cex', 'dex', 'صرافی متمرکز', 'صرافی غیرمتمرکز', 'صرافی متمرکز و غیرمتمرکز']
+  'CEX_DEX': ['cex و dex', 'تفاوت cex و dex', 'cex', 'dex', 'صرافی متمرکز', 'صرافی غیرمتمرکز', 'صرافی متمرکز و غیرمتمرکز'],
+  'INTEREST_RATES': ['نرخ بهره', 'نرخ بهره آمریکا', 'نرخ بهره و طلا', 'اثر نرخ بهره بر طلا', 'هزینه فرصت'],
+  'INFLATION': ['تورم چیست', 'تورم چیه', 'تورم', 'قدرت خرید پول', 'تفاوت تورم و شاخص قیمت مصرف‌کننده', 'inflation'],
+  'VOLATILITY': ['نوسان چیست', 'نوسان بازار', 'نوسان قیمت', 'نوسانات', 'نوسان', 'volatility'],
+  'DRAWDOWN': ['دراودان', 'drawdown', 'حداکثر افت', 'افت حداکثری', 'حداکثر افت سرمایه'],
+  'STABLECOIN': ['استیبل کوین', 'استیبل‌کوین', 'استیبل', 'stablecoin', 'کوین پایدار'],
+  'ETH_BTC': ['نسبت eth به btc', 'نسبت اتریوم به بیت‌کوین', 'نسبت اتریوم به بیت کوین', 'eth/btc', 'eth btc'],
+  'DIVERSIFICATION': ['تنوع بخشی', 'تنوع‌بخشی', 'diversification', 'ریسک تمرکز', 'concentration risk', 'تمرکز سبد'],
+  'GOLD_PURITY': ['عیار طلا', 'عیار طلا چیست', 'خلوص طلا', 'طلای ۲۴ عیار', 'طلای ۲۴', 'gold purity'],
+  'CORRELATION': ['تفاوت همبستگی و علیت', 'همبستگی و علیت', 'همبستگی', 'correlation', 'علیت', 'causation', 'correlation vs causation']
 };
 
 // Phase 2-3F-B3: تطبیق مرزدار مترادف‌های لاتین (ضد نشت زیررشته‌ای مانند 'sol' در 'consolidation')
@@ -3134,6 +3144,15 @@ const TOPIC_TO_ID_MAP = {
   'COIN_VS_TOKEN': ['coin_vs_token', 'crypto_coin_vs_token'],
   'BROKER_VS_BROKERAGE': ['broker_vs_brokerage', 'broker_vs_brokerage_diff'],
   'CEX_DEX': ['crypto_exchange_types'],
+  'INTEREST_RATES': ['interest_rates_gold_channel'],
+  'INFLATION': ['inflation_concept'],
+  'VOLATILITY': ['volatility_concept'],
+  'DRAWDOWN': ['drawdown_concept'],
+  'STABLECOIN': ['stablecoin_concept'],
+  'ETH_BTC': ['eth_btc_ratio'],
+  'DIVERSIFICATION': ['diversification_concentration'],
+  'GOLD_PURITY': ['gold_purity_concept'],
+  'CORRELATION': ['correlation_vs_causation'],
   'GOLD18_BUBBLE_CORRIDOR': ['gold18_bubble_regimes', 'gold18_bubble'],
   'QUARTER_COIN_BUBBLE': ['coin_quarter_bubble', 'quarter_coin_bubble'],
   'COIN_BUBBLE': ['coin_bubble_calc', 'coin_bubble'],
@@ -3459,6 +3478,7 @@ async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
       category: knowledgeQuery.category,
       keywords: expanded.keywords,
       aliasKeywords: expanded.aliasKeywords,
+      tokenKeywords: expanded.tokenKeywords,
       phrase: expanded.primaryPhrase
     };
     baseResult.query.effectiveKeywords = expanded.keywords.slice();

@@ -2,6 +2,13 @@
 
 ---
 
+## [v4.0.2-phase2-3f-b3-kb] — تکمیل پوشش دانش‌نامه (Phase 2-3F-B3-KB)
+* **۹ موضوع جدید دانش‌نامه** (`INTEREST_RATES`·`INFLATION`·`VOLATILITY`·`DRAWDOWN`·`STABLECOIN`·`ETH_BTC`·`DIVERSIFICATION`·`GOLD_PURITY`·`CORRELATION`) با کلیدواژه‌های مرزدار + نگاشت موضوع→شناسه برای ۱۱ مدخل تکمیلی.
+* **انتقال `tokenKeywords` مشتق‌شده به `effectiveQuery`** در مسیر بازیاب ورکر ⇒ پرسش‌های زبان طبیعی («نرخ بهره چه اثری بر طلا دارد؟»، «نسبت ETH به BTC چیست؟»، «عیار طلا چیست؟») به مدخل درست می‌رسند.
+* **نشانگر فاز** `Phase 2-3F-B3-KB (Knowledge Base Completion & Coverage)` و وضعیت سلامت `knowledgeCoverage` افزوده شد؛ `knowledgeRouting`/`knowledgeHardening`/`temporalSafety`/`dataIntegrity`/`scenarioBinding`/`workingMemory`/`identityProfile`/`responsePresentation` فریزشده باقی است.
+* **دادهٔ D1:** محتوای تکمیلی از طریق بذر `d1_b3kb_knowledge_completion_seed.sql` (۱۱ درج + ۴ به‌روزرسانی هدفمند، بدون schema change) تأمین می‌شود؛ ورکر هیچ نوشتنی روی D1 انجام نمی‌دهد (فقط SELECT).
+* **آزمون‌ها:** سوئیت `test_v253_knowledge_hardening.js` گسترش‌یافته (I1…I12) + رانر جامع ۵۹/۵۹ PASS + پادهرگرسیون آنافورای «چرا» با دارایی فعال.
+
 ## [v4.0.1-phase2-3f-b3-kh] — سخت‌سازی بازیابی و ارائه دانش (Phase 2-3F-B3-KH)
 * **سیاست کانونیکال ارتباط:** `KNOWLEDGE_RELEVANCE_POLICY{retrievalMinimum 0.40, presentationMinimum 0.40, strongMatch 0.65}` جای تضاد پیشین ۰٫۴۰/۰٫۷۰ را گرفت؛ `KNOWLEDGE_PRESENT_MIN_SCORE = 0.70` حذف شد و ورکر/آینه همان حد ارائه سیاست را مصرف می‌کنند.
 * **نشانه‌گذاری و مرز واژه:** نرمال‌سازی نشانه‌های فارسی/عربی/لاتین + نیم‌فاصله، `kwHit` مرز واژه‌ای یونیکد-آگاه با حداقل طول ۳ و مرزدار شدن تشخیص موضوع؛ «بیت کوین چیست/چیست؟/بیت‌کوین چیست؟» نتیجه یکسان می‌دهند.
