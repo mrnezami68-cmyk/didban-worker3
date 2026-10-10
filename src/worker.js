@@ -387,7 +387,8 @@ export default {
               label: _resolvedTf.label,
               horizon: _resolvedTf.horizon,
               requiresHistoricalData: _resolvedTf.requiresHistoricalData,
-              requiresForecastCapability: _resolvedTf.requiresForecastCapability
+              requiresForecastCapability: _resolvedTf.requiresForecastCapability,
+              windowDays: _resolvedTf.windowDays // Phase 2-3H (M1/S2): فقط برای PAST_N_DAYS مقدار دارد
             };
           }
         }
@@ -451,9 +452,23 @@ export default {
         const isConditionalScenarioRequest = (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON');
         if ((needsHistorical || needsForecast) && !isConditionalScenarioRequest) {
           // FIX-B2-1 (Phase 2-3F-B2): شاخه «شواهد تاریخی موجود» — استفاده از همان شواهد، بدون هیچ جانشینی LIVE
-          const historicalItems = (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.historical))
+          let historicalItems = (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.historical))
             ? unifiedEvidenceContract.evidence.historical
             : [];
+          // Phase 2-3H (M1/S3): پل تاریخی — پرکردن شواهد تاریخی از daily_snapshots؛ شکست/خالی → همان گارد صادقانه فعلی.
+          // گیت AMBIGUOUS: برچسب‌های این‌هفته/این‌ماه/امسال فقط با فعل گذشته/بازده صریح تاریخی می‌شوند (پرسش آینده‌نگر ربوده نمی‌شود).
+          if (needsHistorical && historicalItems.length === 0) {
+            const _tfAmbiguous = !!(tfCtx && tfCtx.horizon === 'AMBIGUOUS');
+            const _pastPhrase = /(چند بود|چقدر بود|رشد کرد|چقدر رشد|تغییر کرد|چقدر تغییر|بازده|چند شد|چقدر شد|کرده)/.test(String(userMsg || ''));
+            if (!_tfAmbiguous || _pastPhrase) {
+              try {
+                historicalItems = await fetchHistoricalEvidence(queryAnalysis.entities, tfCtx, env);
+                if (historicalItems.length > 0 && unifiedEvidenceContract.evidence) {
+                  unifiedEvidenceContract.evidence.historical = historicalItems;
+                }
+              } catch (histErr) { historicalItems = []; }
+            }
+          }
           if (needsHistorical && historicalItems.length > 0) {
             const historicalReply = buildHistoricalEvidenceResponse(queryAnalysis, historicalItems);
             if (historicalReply) {
@@ -1995,8 +2010,12 @@ function buildHistoricalEvidenceResponse(cir = {}, historicalItems = []) {
     return toFaDigitsHist(Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })).replace(/,/g, '٬').replace(/\./g, '٫');
   };
   const tf = (cir && cir.context && cir.context.timeframe) || {};
-  const labelMap = { YESTERDAY: 'دیروز', PAST_WEEK: 'هفته گذشته', PAST_MONTH: 'ماه گذشته', PAST_YEAR: 'سال گذشته' };
-  const label = labelMap[tf.label] || 'بازه تاریخی درخواستی';
+  const labelMap = { YESTERDAY: 'دیروز', PAST_WEEK: 'هفته گذشته', PAST_MONTH: 'ماه گذشته', PAST_YEAR: 'سال گذشته',
+    THIS_WEEK: 'این هفته (تاکنون)', THIS_MONTH: 'این ماه (تاکنون)', THIS_YEAR: 'از ابتدای سال' }; // Phase 2-3H (M1/S4)
+  let label = labelMap[tf.label] || 'بازه تاریخی درخواستی';
+  if (tf.label === 'PAST_N_DAYS' && Number.isFinite(Number(tf.windowDays))) {
+    label = toFaDigitsHist(String(tf.windowDays)) + ' روز اخیر';
+  }
   const lines = [];
   historicalItems.forEach((it) => {
     if (!it || typeof it !== 'object') return;
@@ -2165,6 +2184,8 @@ const TEMPORAL_RULES = [
   { label: 'NEXT_DAYS', patterns: ['چند روز آینده', 'چند روز بعد', 'روزهای آینده', 'تا چند روز', 'هفته آینده'], horizon: 'FORECAST', rh: false, rf: true },
   { label: 'THIS_WEEK', patterns: ['هفته جاری', 'این هفته', 'هفته جاری'], horizon: 'AMBIGUOUS', rh: true, rf: false },
   { label: 'THIS_MONTH', patterns: ['این ماه', 'ماه جاری'], horizon: 'AMBIGUOUS', rh: true, rf: false },
+  // Phase 2-3H (M1/S2): «امسال/از اول سال» — AMBIGUOUS تا پرسش آینده‌نگر ربوده نشود؛ تفکیک با گیت فعل گذشته در call-site
+  { label: 'THIS_YEAR', patterns: ['امسال', 'سال جاری', 'از اول سال', 'از ابتدای سال', 'ابتدای سال تا الان'], horizon: 'AMBIGUOUS', rh: true, rf: false },
   { label: 'TOMORROW', patterns: ['فردا'], horizon: 'FORECAST', rh: false, rf: true }
 ];
 
@@ -2176,6 +2197,14 @@ const resolveTemporal = (rawText) => {
   const s = wmNormalize(rawText);
   if (!s) {
     return { label: null, matched: null, horizon: 'CURRENT', requiresHistoricalData: false, requiresForecastCapability: false };
+  }
+  // Phase 2-3H (M1/S2): پنجره پویای «N روز گذشته/اخیر» (۲ تا ۳۶۵) — فیلد افزایشی windowDays؛ مقدم بر قواعد ایستا تا «روز گذشته» در YESTERDAY آن را نرباید
+  const _nDays = s.match(/([0-9۰-۹]{1,3})\s*روز\s*(?:گذشته|اخیر|پیش)/);
+  if (_nDays) {
+    const _n = Number(String(_nDays[1]).replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+    if (Number.isFinite(_n) && _n >= 2 && _n <= 365) {
+      return { label: 'PAST_N_DAYS', matched: _nDays[0], horizon: 'HISTORICAL', requiresHistoricalData: true, requiresForecastCapability: false, windowDays: _n };
+    }
   }
   for (const rule of TEMPORAL_RULES) {
     for (const p of rule.patterns) {
@@ -3506,6 +3535,100 @@ const anyQueryKeywordHits = (field, list) => (list || []).some((kw) => queryHits
   }
 
   return { score: finalScore, reasons };
+}
+
+/* ==========================================================================
+   Phase 2-3H (M1/S1) — پل تاریخی worker3 ↔ market_db (فقط SELECT از daily_snapshots)
+   اصول: هیچ جایگزینی تاریخی↔زنده؛ روز غایب = غایب (بدون درون‌یابی)؛ داده ناقص هرگز صفر/حدس نمی‌شود.
+   fetchDailySeries جدا نگه داشته شده تا M2 (نوسان/افت/همبستگی) همین سری را مصرف کند.
+   ========================================================================== */
+const HISTORICAL_ASSET_KEY_MAP = {
+  USD: 'usd', GOLD18: 'gold18', COIN: 'sekee', XAU: 'xau', XAG: 'xag',
+  USDT: 'usdt', BTC: 'btc', ETH: 'eth', OIL: 'oil', TSE_INDEX: 'tse_index'
+};
+const HISTORICAL_ASSET_UNITS = {
+  usd: 'تومان', usdt: 'تومان', gold18: 'تومان', sekee: 'تومان',
+  xau: 'دلار', xag: 'دلار', btc: 'دلار', eth: 'دلار', oil: 'دلار', tse_index: 'واحد'
+};
+
+async function fetchDailySeries(snapshotKeys, days, env) {
+  if (!env || !env.DB || !Array.isArray(snapshotKeys) || snapshotKeys.length === 0) return {};
+  const limit = Math.max(2, Math.min(Number(days) || 0, 370));
+  const rows = await env.DB.prepare('SELECT date, assets_json FROM daily_snapshots ORDER BY date DESC LIMIT ?').bind(limit).all();
+  const series = {};
+  snapshotKeys.forEach((k) => { series[k] = []; });
+  ((rows && rows.results) || []).reverse().forEach((r) => {
+    let json = null;
+    try { json = typeof r.assets_json === 'string' ? JSON.parse(r.assets_json) : r.assets_json; } catch (e) { json = null; }
+    if (!json || typeof json !== 'object') return;
+    snapshotKeys.forEach((k) => {
+      const a = json[k];
+      const p = (a && a.price !== null && a.price !== undefined) ? Number(a.price) : NaN;
+      if (Number.isFinite(p) && p > 0) series[k].push({ date: String(r.date), price: p });
+    });
+  });
+  return series;
+}
+
+function historicalWindowDays(tf) {
+  const label = tf && tf.label;
+  if (label === 'YESTERDAY') return 4;
+  if (label === 'PAST_WEEK' || label === 'THIS_WEEK') return 8;
+  if (label === 'PAST_MONTH' || label === 'THIS_MONTH') return 31;
+  if (label === 'PAST_YEAR') return 366;
+  if (label === 'THIS_YEAR') {
+    const start = Date.UTC(new Date().getUTCFullYear(), 0, 1);
+    return Math.max(2, Math.min(366, Math.ceil((Date.now() - start) / 86400000) + 1));
+  }
+  if (label === 'PAST_N_DAYS') {
+    const n = Number(tf && tf.windowDays);
+    return (Number.isFinite(n) && n >= 2) ? Math.min(n + 1, 366) : 8;
+  }
+  return 0;
+}
+
+async function fetchHistoricalEvidence(entities, tf, env) {
+  const windowDays = historicalWindowDays(tf);
+  if (!windowDays) return [];
+  const explicit = (Array.isArray(entities) ? entities : [])
+    .map((e) => String((e && e.value) || '').toUpperCase())
+    .filter((a) => HISTORICAL_ASSET_KEY_MAP[a]);
+  const targetAssets = explicit.length > 0 ? [...new Set(explicit)] : ['USD', 'GOLD18', 'COIN', 'XAU'];
+  const keys = targetAssets.map((a) => HISTORICAL_ASSET_KEY_MAP[a]);
+  const series = await fetchDailySeries(keys, windowDays, env);
+  const items = [];
+  const requestStartMs = Date.now() - (windowDays - 1) * 86400000;
+  const tehranToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tehran' });
+  targetAssets.forEach((asset) => {
+    const key = HISTORICAL_ASSET_KEY_MAP[asset];
+    const unit = HISTORICAL_ASSET_UNITS[key] || '';
+    const pts = series[key] || [];
+    if (pts.length === 0) return; // داده غایب = غایب
+    if (tf && tf.label === 'YESTERDAY') {
+      const past = pts.filter((p) => p.date < tehranToday);
+      if (past.length === 0) return;
+      const y = past[past.length - 1];
+      const item = { asset, value: y.price, unit, note: 'تاریخ مشاهده: ' + y.date };
+      if (past.length >= 2 && past[past.length - 2].price > 0) {
+        item.changePct = ((y.price - past[past.length - 2].price) / past[past.length - 2].price) * 100;
+      }
+      items.push(item);
+      return;
+    }
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    const noteParts = ['بازه واقعی: ' + first.date + ' تا ' + last.date + ' (' + pts.length + ' نقطه روزانه)'];
+    const firstMs = Date.parse(first.date + 'T00:00:00Z');
+    if (Number.isFinite(firstMs) && (firstMs - requestStartMs) > 2 * 86400000) {
+      noteParts.push('⚠️ عمق داده از ' + first.date + ' موجود است؛ پوشش بازه درخواستی ناقص است');
+    }
+    const item = { asset, value: last.price, unit, note: noteParts.join(' — ') };
+    if (pts.length >= 2 && first.price > 0) {
+      item.changePct = ((last.price - first.price) / first.price) * 100;
+    }
+    items.push(item);
+  });
+  return items;
 }
 
 async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
