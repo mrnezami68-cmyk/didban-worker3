@@ -452,9 +452,10 @@ export default {
           if (/(همبستگی|واگرایی)/.test(_mq)) _metricKind = 'CORRELATION';
           else if (/(بیشترین\s*افت|حداکثر\s*افت|بیشینه\s*افت|افت\s*سرمایه|دراودان|drawdown)/i.test(_mq)) _metricKind = 'DRAWDOWN';
           else if (/نوسان/.test(_mq)) _metricKind = 'VOLATILITY';
+          // توجه: گیت requiresKnowledge عمداً حذف شد — واژه‌های سنجه (نوسان/حداکثر افت/همبستگی) عیناً در KNOWLEDGE_TOPICS
+          // هستند و پرچم را true می‌کنند؛ محافظت مسیر دانش با METRIC_EXCLUDE (چیست/چیه/یعنی/تعریف) تضمین می‌شود.
           if (_metricKind && METRIC_NUMERIC_ASK.test(_mq) && !METRIC_EXCLUDE.test(_mq) && !detectWhyQuery(userMsg) &&
-              queryAnalysis.intent.primary !== 'WHAT_IF' && queryAnalysis.intent.primary !== 'SCENARIO_COMPARISON' &&
-              !queryAnalysis.requiresKnowledge) {
+              queryAnalysis.intent.primary !== 'WHAT_IF' && queryAnalysis.intent.primary !== 'SCENARIO_COMPARISON') {
             try {
               const _mTf = (queryAnalysis.context && queryAnalysis.context.timeframe) ? queryAnalysis.context.timeframe : null;
               const metricsPayload = await fetchMetricsEvidence(_metricKind, queryAnalysis.entities, _mTf, env);
