@@ -523,6 +523,33 @@ export default {
           }
         }
 
+        // ۳.۶ب. Phase 2-3H (M1b): پل روایت تحلیلی نبض بازار (دترمینیستیک، بدون LLM) — فقط عبارات صریح؛ شکست ⇒ عبور به مسیر عادی
+        const PULSE_REQUEST_PATTERN = /(نبض\s*بازار|تحلیل\s*کلی|تحلیل\s*جامع\s*بازار|گزارش\s*(کلی|جامع)\s*بازار|وضعیت\s*کلی\s*بازار)/;
+        const PULSE_EXCLUDE_PATTERN = /(کریپتو|بیت|اتریوم|سولانا|بورس|سهام|شاخص|چیست|چیه|یعنی|به\s*چه\s*معنا)/;
+        if (PULSE_REQUEST_PATTERN.test(String(userMsg || '')) &&
+            !PULSE_EXCLUDE_PATTERN.test(String(userMsg || '')) &&
+            !detectWhyQuery(userMsg) &&
+            queryAnalysis.intent.primary !== 'WHAT_IF' && queryAnalysis.intent.primary !== 'SCENARIO_COMPARISON' &&
+            !queryAnalysis.requiresKnowledge) {
+          try {
+            const pulseContract = await fetchPulseContract(env);
+            if (pulseContract) {
+              const pulseNarrative = generateDeterministicNarrative(pulseContract, 'MARKET_PULSE');
+              const pulseReply = `🩺 **نبض بازار (تحلیل دترمینیستیک)** — بر پایه آخرین اسنپ‌شات رسمی روزانه (ثبت ساعت ۲۳:۰۰ — ${pulseContract.meta.snapshotDate})\n\n${pulseNarrative.narrative}\n\nاین تحلیل صرفاً از داده‌های ثبت‌شده رسمی ساخته شده و هیچ قیمت لحظه\u200cای جایگزین آن\u200cها نشده است؛ برای نرخ لحظه\u200cای هر دارایی، همان را جداگانه بپرسید.`;
+              return new Response(JSON.stringify({
+                success: true,
+                reply: pulseReply,
+                source: 'DETERMINISTIC_PULSE_NARRATIVE',
+                responseLevel: RESPONSE_LEVELS.STANDARD,
+                interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+                retrievedKnowledge,
+                unifiedEvidence: unifiedEvidenceContract,
+                timestamp: new Date().toISOString()
+              }), { headers: corsHeaders });
+            }
+          } catch (pulseErr) { /* شکست واکشی ⇒ ادامه مسیر عادی (بدون مسیر امتناع جدید) */ }
+        }
+
         // ۳.۷. پاسخ کوتاه و متناسب وضعیت بازار (MARKET_STATUS) — بدون گزارش‌های نامرتبط
         if (queryAnalysis.intent.primary === 'MARKET_STATUS' &&
             Array.isArray(queryAnalysis.entities) && queryAnalysis.entities.length >= 1 && queryAnalysis.entities.length <= 2 &&
@@ -3629,6 +3656,35 @@ async function fetchHistoricalEvidence(entities, tf, env) {
     items.push(item);
   });
   return items;
+}
+
+/* Phase 2-3H (M1b): قرارداد حداقلی نبض بازار از اسنپ‌شات‌های رسمی — فقط فیلدهای قابل‌استناد؛ حباب/ضمنی عمداً غایب */
+async function fetchPulseContract(env) {
+  const series = await fetchDailySeries(['usd', 'gold18', 'xau'], 9, env);
+  const pct = (a, b) => (Number.isFinite(a) && Number.isFinite(b) && b > 0) ? ((a - b) / b) * 100 : null;
+  const out = { fx: {}, gold: {}, coin: {}, returns: { '24h': {}, '7d': {} }, dataQuality: { insufficientHistory: [] }, meta: { snapshotDate: null } };
+  let any = false;
+  for (const key of ['usd', 'gold18', 'xau']) {
+    const s = (series && Array.isArray(series[key])) ? series[key] : [];
+    if (s.length === 0) continue;
+    const last = s[s.length - 1];
+    const prev = s.length >= 2 ? s[s.length - 2] : null;
+    const weekAgo = s.length >= 8 ? s[s.length - 8] : null;
+    any = true;
+    if (!out.meta.snapshotDate || last.date > out.meta.snapshotDate) out.meta.snapshotDate = last.date;
+    if (key === 'usd') out.fx.freeUSD = last.price;
+    if (key === 'gold18') out.gold.gold18 = last.price;
+    if (key === 'xau') out.gold.xau = last.price;
+    const r24 = prev ? pct(last.price, prev.price) : null;
+    if (r24 !== null) out.returns['24h'][key] = r24;
+    if (weekAgo) {
+      const r7 = pct(last.price, weekAgo.price);
+      if (r7 !== null) out.returns['7d'][key] = r7;
+    } else if (!out.dataQuality.insufficientHistory.includes('بازده ۷روزه')) {
+      out.dataQuality.insufficientHistory.push('بازده ۷روزه');
+    }
+  }
+  return any ? out : null;
 }
 
 async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
