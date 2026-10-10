@@ -646,13 +646,40 @@ export default {
           // Phase 2-3G-CX (P0-1): بازسازی از حافظه ممکن نشد → پل شفاف‌سازی مقدار شوک (نه fallback عمومی)
           if (!whatIfAst && whatIfMagnitudeClarify) whatIfAst = whatIfMagnitudeClarify;
           if (whatIfAst) {
+            // Phase 2-3H (M3): سلامت نرخ مبنا — زنده ⇒ مثل امروز؛ نبود شواهد ⇒ آخرین اسنپ‌شات رسمی با برچسب صریح (مسیر M1)؛ نبود هر دو ⇒ امتناع صادقانه شبیه‌ساز
+            let whatIfBaseNote = '';
+            if (whatIfAst.status === 'VALID' || whatIfAst.type === 'MULTI_SCENARIO_COMPARISON') {
+              try {
+                const _M3_BASE_LABELS = { usd: 'دلار آزاد', xau: 'اونس جهانی', gold18: 'طلای ۱۸ عیار', sekee: 'سکه امامی', xag: 'نقره جهانی' };
+                const _needBase = ['usd', 'xau', 'gold18', 'sekee', 'xag'].filter((k) => !(normalizedEvidence[k] && Number.isFinite(normalizedEvidence[k].value) && normalizedEvidence[k].value > 0));
+                if (_needBase.length > 0) {
+                  const _snapSeries = await fetchDailySeries(_needBase, 3, env);
+                  let _snapDate = null;
+                  const _filled = [];
+                  for (const k of _needBase) {
+                    const _s = _snapSeries[k] || [];
+                    if (_s.length > 0) {
+                      const _last = _s[_s.length - 1];
+                      normalizedEvidence[k] = { value: _last.price, unit: HISTORICAL_ASSET_UNITS[k] || '', provenance: 'HISTORICAL', snapshotDate: _last.date };
+                      _filled.push(_M3_BASE_LABELS[k] || k);
+                      if (!_snapDate || _last.date > _snapDate) _snapDate = _last.date;
+                    }
+                  }
+                  if (_snapDate && _filled.length > 0) {
+                    whatIfBaseNote = '\n\n🏷️ **مبنای ' + _filled.join('، ') + ': داده تاریخی ' + _snapDate + '** (آخرین اسنپ\u200cشات رسمی ثبت\u200cشده — برای این موارد قیمت لحظه\u200cای در دسترس نبود). نتایج سناریو بر همین مبنا محاسبه شده\u200cاند و با نرخ لحظه\u200cای جایگزین نشده\u200cاند.';
+                  }
+                }
+              } catch (snapErr) { /* شکست واکشی ⇒ شبیه‌ساز خود امتناع صادقانه می‌دهد */ }
+            }
             let whatIfReply = '';
             if (whatIfAst.type === 'MULTI_SCENARIO_COMPARISON') {
               const multiRes = executeMultiScenarioComparison(whatIfAst, normalizedEvidence);
               whatIfReply = renderWhatIfResponse(multiRes);
+              if (whatIfBaseNote && multiRes && multiRes.status === 'SUCCESS_MULTI' && whatIfReply) whatIfReply += whatIfBaseNote;
             } else {
               const simRes = executeWhatIfSimulation(whatIfAst, normalizedEvidence);
               whatIfReply = renderWhatIfResponse(simRes);
+              if (whatIfBaseNote && simRes && simRes.status === 'SUCCESS' && whatIfReply) whatIfReply += whatIfBaseNote;
             }
 
             if (whatIfReply) {
@@ -4943,11 +4970,22 @@ function parseSingleWhatIf(text, recentContext = []) {
 function executeWhatIfSimulation(ast, normalizedEvidence) {
   if (!ast || ast.status !== 'VALID') return ast;
 
-  const baseUsd = normalizedEvidence.usd?.value || 268000;
-  const baseXau = normalizedEvidence.xau?.value || 2980;
-  const baseGold18 = normalizedEvidence.gold18?.value || 26550000;
-  const baseSekee = normalizedEvidence.sekee?.value || 285000000;
-  const baseXag = normalizedEvidence.xag?.value || 33.5;
+  // Phase 2-3H (M3): حذف مبناهای ثابت — مبنا فقط از شواهد معتبر؛ نبود مبنا ⇒ امتناع صادقانه (هیچ عدد پیش‌فرض/کهنه‌ای جایگزین نمی‌شود)
+  const _vb = (x) => (x && Number.isFinite(x.value) && x.value > 0) ? x.value : null;
+  const baseUsd = _vb(normalizedEvidence.usd);
+  const baseXau = _vb(normalizedEvidence.xau);
+  const baseGold18 = _vb(normalizedEvidence.gold18);
+  const baseSekee = _vb(normalizedEvidence.sekee);
+  const baseXag = _vb(normalizedEvidence.xag);
+  const _missingBases = [];
+  if (baseUsd === null) _missingBases.push('دلار آزاد');
+  if (baseXau === null) _missingBases.push('اونس جهانی');
+  if (baseGold18 === null) _missingBases.push('طلای ۱۸ عیار');
+  if (baseSekee === null) _missingBases.push('سکه امامی');
+  if (baseXag === null) _missingBases.push('نقره جهانی');
+  if (_missingBases.length > 0) {
+    return { type: 'WHAT_IF', status: 'INSUFFICIENT_BASE', missingBases: _missingBases, rawQuery: ast.rawQuery };
+  }
 
   const baseGold18Intrinsic = Math.round((baseXau * baseUsd * CANONICAL_CONSTANTS.GOLD18_PURITY) / CANONICAL_CONSTANTS.TROY_OUNCE_ROUNDED);
   const baseCoinIntrinsic = Math.round((CANONICAL_CONSTANTS.COIN_EMAMI_PURE_GOLD_GRAMS / CANONICAL_CONSTANTS.TROY_OUNCE_ROUNDED) * baseXau * baseUsd);
@@ -5106,6 +5144,10 @@ function executeMultiScenarioComparison(multiAst, normalizedEvidence) {
   const resA = executeWhatIfSimulation(multiAst.scenarioA, normalizedEvidence);
   const resB = executeWhatIfSimulation(multiAst.scenarioB, normalizedEvidence);
 
+  // Phase 2-3H (M3): نبود مبنای معتبر در هر سناریو ⇒ همان امتناع صادقانه (نه خطای عمومی)
+  if (resA.status === 'INSUFFICIENT_BASE') return resA;
+  if (resB.status === 'INSUFFICIENT_BASE') return resB;
+
   if (resA.status !== 'SUCCESS' || resB.status !== 'SUCCESS') {
     return { status: 'ERROR', error: 'خطا در تحلیل یکی از سناریوهای مقایسه‌ای' };
   }
@@ -5129,6 +5171,12 @@ function executeMultiScenarioComparison(multiAst, normalizedEvidence) {
 }
 
 function renderWhatIfResponse(simResult) {
+  // Phase 2-3H (M3): امتناع صادقانه از شبیه‌سازی بدون نرخ مبنای معتبر (الگوی گاردهای موجود)
+  if (simResult && simResult.status === 'INSUFFICIENT_BASE') {
+    return '🚫 **مبنای معتبر برای شبیه\u200cسازی در دسترس نیست.**\n\n' +
+      'نرخ مبنای این دارایی\u200cها از هیچ منبع معتبری (شواهد زنده یا آخرین اسنپ\u200cشات رسمی) قابل تأمین نبود: **' + simResult.missingBases.join('، ') + '**.\n\n' +
+      'طبق قواعد صداقت داده، هیچ عدد پیش\u200cفرض یا کهنه\u200cای جایگزین نمی\u200cشود و شبیه\u200cسازی بدون مبنای واقعی انجام نمی\u200cگیرد. لطفاً زمانی که داده بازار در دسترس است دوباره بپرسید.';
+  }
   if (!simResult) return '';
 
   // Phase 2-3G-CX (P0-1): ابهام «مقدار شوک» — دارایی و جهت معلوم، فقط درصد لازم است (هیچ مقداری پیش‌فرض نمی‌شود)
