@@ -442,6 +442,41 @@ export default {
           options: { alreadyNormalized: true }
         });
 
+        // ۳.۵ب. Phase 2-3H (M2): سنجه‌های تحلیلی تاریخی — مسیریابی مضیّق (نوسان/بیشینه افت/همبستگی عددی)
+        // قبل از گارد افق زمانی تا «نوسان X این ماه چقدر بود» به ارائه قیمت تاریخی نیفتد؛ «قیمت X چنده» مطلقاً دست\u200cنخورده.
+        {
+          const _mq = String(userMsg || '');
+          const METRIC_NUMERIC_ASK = /(چقدره|چقدر است|چنده|چند است|چقدر بود|چند بود|چقدر|میزان|ضریب|عدد)/;
+          const METRIC_EXCLUDE = /(چیست|چیه|یعنی|به\s*چه\s*معنا|تعریف)/;
+          let _metricKind = null;
+          if (/(همبستگی|واگرایی)/.test(_mq)) _metricKind = 'CORRELATION';
+          else if (/(بیشترین\s*افت|حداکثر\s*افت|بیشینه\s*افت|افت\s*سرمایه|دراودان|drawdown)/i.test(_mq)) _metricKind = 'DRAWDOWN';
+          else if (/نوسان/.test(_mq)) _metricKind = 'VOLATILITY';
+          if (_metricKind && METRIC_NUMERIC_ASK.test(_mq) && !METRIC_EXCLUDE.test(_mq) && !detectWhyQuery(userMsg) &&
+              queryAnalysis.intent.primary !== 'WHAT_IF' && queryAnalysis.intent.primary !== 'SCENARIO_COMPARISON' &&
+              !queryAnalysis.requiresKnowledge) {
+            try {
+              const _mTf = (queryAnalysis.context && queryAnalysis.context.timeframe) ? queryAnalysis.context.timeframe : null;
+              const metricsPayload = await fetchMetricsEvidence(_metricKind, queryAnalysis.entities, _mTf, env);
+              if (metricsPayload) {
+                const metricsReply = buildMetricsResponse(metricsPayload);
+                if (metricsReply) {
+                  return new Response(JSON.stringify({
+                    success: true,
+                    reply: metricsReply,
+                    source: 'DETERMINISTIC_HISTORICAL_METRICS',
+                    responseLevel: RESPONSE_LEVELS.STANDARD,
+                    interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+                    retrievedKnowledge,
+                    unifiedEvidence: unifiedEvidenceContract,
+                    timestamp: new Date().toISOString()
+                  }), { headers: corsHeaders });
+                }
+              }
+            } catch (metricsErr) { /* شکست محاسبه/واکشی ⇒ ادامه مسیر عادی (بدون مسیر امتناع جدید) */ }
+          }
+        }
+
         // ۳.۶. گارد قابلیت افق زمانی (Phase 2-3C): بدون جانشینی LIVE به‌جای HISTORICAL/FORECAST
         const tfCtx = (queryAnalysis.context && queryAnalysis.context.timeframe) ? queryAnalysis.context.timeframe : null;
         const missingCaps = (unifiedEvidenceContract.capabilities && Array.isArray(unifiedEvidenceContract.capabilities.missingEvidence))
@@ -3685,6 +3720,157 @@ async function fetchPulseContract(env) {
     }
   }
   return any ? out : null;
+}
+
+/* --------------------------------------------------------------------------
+   Phase 2-3H (M2) — سنجه‌های تحلیلی تاریخی (قطعی، روی سری M1؛ فقط توصیف گذشته)
+   نوسان = انحراف معیار نمونه‌ای بازده روزانه · بیشینه افت = قله‌تاکف · همبستگی =
+   هم‌راستاسازی تاریخ + فرمول مرجع P2 (واریانس صفر ⇒ ۰؛ برش [-۱,۱]).
+   -------------------------------------------------------------------------- */
+const METRICS_ASSET_LABELS_FA = {
+  USD: 'دلار آزاد', GOLD18: 'طلای ۱۸ عیار', COIN: 'سکه امامی', XAU: 'اونس جهانی طلا',
+  USDT: 'تتر', BTC: 'بیت\u200cکوین', ETH: 'اتریوم', XAG: 'نقره جهانی', TSE_INDEX: 'شاخص کل بورس'
+};
+
+function computeDailyReturnsM2(points) {
+  const out = [];
+  if (!Array.isArray(points)) return out;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1], cur = points[i];
+    if (prev && cur && Number.isFinite(prev.price) && Number.isFinite(cur.price) && prev.price > 0) {
+      out.push({ date: cur.date, r: ((cur.price - prev.price) / prev.price) * 100 });
+    }
+  }
+  return out;
+}
+
+function computeSampleStdM2(values) {
+  if (!Array.isArray(values) || values.length < 2) return null;
+  const mean = values.reduce((s, v) => s + v, 0) / values.length;
+  const ss = values.reduce((s, v) => s + (v - mean) * (v - mean), 0);
+  return Math.sqrt(ss / (values.length - 1));
+}
+
+function computeMaxDrawdownM2(points) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  let peak = points[0], maxDd = 0, peakAt = points[0], troughAt = points[0];
+  for (const p of points) {
+    if (p.price > peak.price) peak = p;
+    const dd = ((p.price - peak.price) / peak.price) * 100;
+    if (dd < maxDd) { maxDd = dd; peakAt = peak; troughAt = p; }
+  }
+  return { maxDrawdownPct: maxDd, peakDate: peakAt.date, troughDate: troughAt.date };
+}
+
+function computePearsonM2(seriesA, seriesB) {
+  // هم‌راستاسازی تاریخ (مطابق معناشناسی فریزشده P2: نقاط منطبق، واریانس صفر ⇒ ۰)
+  const mapB = new Map((Array.isArray(seriesB) ? seriesB : []).map((p) => [p.date, p.price]));
+  const common = (Array.isArray(seriesA) ? seriesA : []).filter((p) => mapB.has(p.date));
+  const rA = [], rB = [];
+  for (let i = 1; i < common.length; i++) {
+    const d0 = common[i - 1], d1 = common[i];
+    const b0 = mapB.get(d0.date), b1 = mapB.get(d1.date);
+    if (d0.price > 0 && b0 > 0) {
+      rA.push(((d1.price - d0.price) / d0.price) * 100);
+      rB.push(((b1 - b0) / b0) * 100);
+    }
+  }
+  const n = rA.length;
+  if (n < 2) return { r: null, n, firstDate: null, lastDate: null };
+  const meanA = rA.reduce((s, v) => s + v, 0) / n;
+  const meanB = rB.reduce((s, v) => s + v, 0) / n;
+  let num = 0, denA = 0, denB = 0;
+  for (let i = 0; i < n; i++) {
+    const da = rA[i] - meanA, db = rB[i] - meanB;
+    num += da * db; denA += da * da; denB += db * db;
+  }
+  if (denA === 0 || denB === 0 || !Number.isFinite(denA) || !Number.isFinite(denB)) {
+    return { r: 0, n, firstDate: common[0].date, lastDate: common[common.length - 1].date };
+  }
+  const r = Math.max(-1, Math.min(1, num / Math.sqrt(denA * denB)));
+  return { r: Number(r.toFixed(3)), n, firstDate: common[0].date, lastDate: common[common.length - 1].date };
+}
+
+const METRICS_MIN_RETURNS = 5;
+
+async function fetchMetricsEvidence(kind, entities, tf, env) {
+  const windowDays = historicalWindowDays(tf) || 31;
+  const mapped = [...new Set((Array.isArray(entities) ? entities : [])
+    .map((e) => String((e && e.value) || '').toUpperCase())
+    .filter((a) => HISTORICAL_ASSET_KEY_MAP[a]))];
+
+  if (kind === 'CORRELATION') {
+    if (mapped.length < 2) return null;
+    const [a, b] = mapped;
+    const series = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[a], HISTORICAL_ASSET_KEY_MAP[b]], windowDays, env);
+    const sA = series[HISTORICAL_ASSET_KEY_MAP[a]] || [];
+    const sB = series[HISTORICAL_ASSET_KEY_MAP[b]] || [];
+    if (sA.length === 0 || sB.length === 0) return null;
+    const res = computePearsonM2(sA, sB);
+    if (res.n < METRICS_MIN_RETURNS) return { kind, assets: [a, b], insufficient: true, n: res.n, windowDays };
+    return { kind, assets: [a, b], r: res.r, n: res.n, firstDate: res.firstDate, lastDate: res.lastDate, windowDays };
+  }
+
+  if (mapped.length < 1) return null;
+  const a = mapped[0];
+  const series = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[a]], windowDays, env);
+  const s = series[HISTORICAL_ASSET_KEY_MAP[a]] || [];
+  if (s.length === 0) return null;
+  const returns = computeDailyReturnsM2(s);
+  if (returns.length < METRICS_MIN_RETURNS) return { kind, assets: [a], insufficient: true, n: returns.length, windowDays };
+  const base = { kind, assets: [a], n: returns.length, firstDate: s[0].date, lastDate: s[s.length - 1].date, windowDays };
+  if (kind === 'VOLATILITY') {
+    return Object.assign(base, { volatilityPct: computeSampleStdM2(returns.map((x) => x.r)) });
+  }
+  if (kind === 'DRAWDOWN') {
+    return Object.assign(base, { drawdown: computeMaxDrawdownM2(s) });
+  }
+  return null;
+}
+
+function buildMetricsResponse(payload) {
+  if (!payload) return null;
+  const faNum = (v, d) => toFaDigits(Number(v).toFixed(d));
+  const labels = payload.assets.map((a) => METRICS_ASSET_LABELS_FA[a] || a);
+  const windowLine = payload.firstDate
+    ? `بازه واقعی محاسبه: ${payload.firstDate} تا ${payload.lastDate} (${toFaDigits(payload.n)} ${payload.kind === 'CORRELATION' ? 'جفت\u200cبازده روزانه' : 'بازده روزانه'})`
+    : `پنجره درخواستی: ${toFaDigits(payload.windowDays)} روز`;
+  const pastOnlyLine = 'این سنجه صرفاً توصیف آماری گذشته است؛ هیچ استنتاج پیش\u200cبینانه یا توصیه\u200cای از آن استخراج نمی\u200cشود.';
+
+  if (payload.insufficient) {
+    return `📏 **داده کافی برای محاسبه این سنجه موجود نیست.**\n\n` +
+      `برای «${labels.join(' و ')}» در پنجره ${toFaDigits(payload.windowDays)} روزه تنها ${toFaDigits(payload.n)} ` +
+      `${payload.kind === 'CORRELATION' ? 'جفت\u200cبازده' : 'بازده'} معتبر یافت شد (حداقل لازم: ${toFaDigits(METRICS_MIN_RETURNS)}). ` +
+      `هیچ مقدار تقریبی یا جایگزین ساخته نمی\u200cشود.`;
+  }
+
+  if (payload.kind === 'CORRELATION') {
+    const r = payload.r;
+    const absR = Math.abs(r);
+    const strength = absR >= 0.7 ? 'قوی' : (absR >= 0.3 ? 'متوسط' : 'ضعیف');
+    const direction = r > 0 ? 'مثبت (هم\u200cجهت)' : (r < 0 ? 'منفی (واگرا)' : 'نزدیک به صفر');
+    const smallSample = payload.n < 30 ? `\n⚠️ حجم نمونه کوچک است (${toFaDigits(payload.n)} جفت\u200cبازده)؛ این برآورد نوسان\u200cپذیر و صرفاً برای بازه موجود معتبر است.` : '';
+    return `📊 **ضریب همبستگی بازده روزانه ${labels[0]} و ${labels[1]}: ${r >= 0 ? '+' : ''}${faNum(r, 2)}**\n\n` +
+      `• شدت و جهت در این بازه: ${strength} و ${direction}\n` +
+      `• ${windowLine}${smallSample}\n\n` +
+      `همبستگی به\u200cمعنای علّیت نیست؛ این عدد فقط هم\u200cحرکتی آماری دو دارایی در بازه ذکرشده را توصیف می\u200cکند. ${pastOnlyLine}`;
+  }
+
+  if (payload.kind === 'VOLATILITY') {
+    return `📊 **نوسان ${labels[0]} (انحراف معیار بازده روزانه): ${faNum(payload.volatilityPct, 2)} واحد درصد**\n\n` +
+      `• ${windowLine}\n\n${pastOnlyLine}`;
+  }
+
+  if (payload.kind === 'DRAWDOWN') {
+    const dd = payload.drawdown;
+    if (!dd || !(dd.maxDrawdownPct < 0)) {
+      return `📊 **بیشینه افت ${labels[0]} در این بازه: صفر** — در نقاط ثبت\u200cشده، افتی از قله رخ نداده است.\n\n• ${windowLine}\n\n${pastOnlyLine}`;
+    }
+    return `📊 **بیشینه افت ${labels[0]} (قله تا کف): ${faNum(dd.maxDrawdownPct, 2)}٪**\n\n` +
+      `• از قله ${dd.peakDate} تا کف ${dd.troughDate}\n` +
+      `• ${windowLine}\n\n${pastOnlyLine}`;
+  }
+  return null;
 }
 
 async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
