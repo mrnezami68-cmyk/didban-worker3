@@ -642,6 +642,21 @@ export default {
           sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
         }
 
+        // Phase 2-3G-CX (P1-2/S3): سطر «مرتبط از دانش‌نامه» برای پاسخ تحلیلی جفت‌دارایی — خطا هرگز پاسخ اصلی را نمی‌شکند
+        try {
+          const crossIntent = (queryAnalysis && queryAnalysis.intent) ? queryAnalysis.intent.primary : null;
+          const crossEligible = replyText && !replyText.includes('قالب‌های تحلیلی شناخته‌شده') &&
+            (crossIntent === 'MARKET_ANALYSIS' || crossIntent === 'ASSET_ANALYSIS' || crossIntent === 'COMPARISON');
+          if (crossEligible) {
+            const crossTopic = detectPairKnowledgeTopic(queryAnalysis.entities);
+            if (crossTopic) {
+              const crossRk = await retrieveKnowledge({ topic: crossTopic, keywords: [] }, env);
+              const crossLine = buildKnowledgeCrossLinkLine(crossRk);
+              if (crossLine) replyText += crossLine;
+            }
+          }
+        } catch (crossErr) { /* پیوند دانش اختیاری است */ }
+
         // ۷. لایه ارائه (Phase 2-3C): پاک‌سازی نشت فرمول/ثابت کانونیکال/نام موتور از پاسخ کاربرنما
         replyText = sanitizeUserFacingResponse(replyText, { technical: isTechnicalRequest });
 
@@ -768,6 +783,8 @@ const KNOWLEDGE_TOPICS = {
   'GOLD_TO_SILVER': ['نسبت طلا به نقره', 'طلا به نقره', 'xau/xag', 'xau xag', 'نسبت اونس طلا به نقره'],
   // Phase 2-3G-CX (P1-3): پرسش تبدیل واحد اونس→گرم باید به دانش‌نامه برود، نه کارت دارایی
   'OUNCE_CONVERSION': ['اونس چند گرم', 'انس چند گرم', 'یک اونس چند گرم', 'هر اونس چند گرم', 'اونس برابر چند گرم', 'اونس معادل چند گرم', 'اونس تروی چند گرم'],
+  // Phase 2-3G-CX (P1-2/S2): پرسش مفهومی رابطه طلا/دلار → مدخل دانش gold_vs_dollar_div (صورت‌های تحلیلی عمداً مستثنا تا مسیر S1 بمانند)
+  'GOLD_VS_DOLLAR': ['رابطه دلار و طلا چیست', 'رابطه دلار و طلا چیه', 'رابطه طلا و دلار چیست', 'رابطه طلا و دلار چیه', 'رابطه دلار با طلا چیست', 'رابطه طلا با دلار چیست', 'تاثیر دلار روی طلا چیست', 'تاثیر دلار روی طلا چیه', 'تأثیر دلار روی طلا چیست', 'تأثیر دلار روی طلا چیه', 'تاثیر دلار بر طلا چیست', 'تأثیر دلار بر طلا چیه'],
   'GOLD_ETF': ['صندوق طلا', 'صندوق های طلا', 'صندوق‌های طلا', 'صندوق عیار', 'صندوق کهربا', 'صندوق زرفام', 'صندوق کالایی طلا', 'gold etf'],
   'COIN_VS_TOKEN': ['تفاوت کوین و توکن', 'فرق کوین و توکن', 'کوین یا توکن', 'کوین و توکن'],
   'HALVING': ['هاوینگ بیت کوین', 'هاوینگ بیت‌کوین', 'هاوینگ', 'halving', 'نصف شدن پاداش بلوک', 'نصف شدن پاداش'],
@@ -1763,6 +1780,7 @@ const ResponsePresentation = (() => {
     'PRICE_CONSOLIDATION': 'تثبیت قیمت (Consolidation)',
     'HALVING': 'هاوینگ بیت‌کوین',
     'OUNCE_CONVERSION': 'تبدیل اونس به گرم',
+    'GOLD_VS_DOLLAR': 'رابطه ساختاری طلا و دلار',
     'GENERAL_FINANCE': 'مفاهیم عمومی مالی'
   };
 
@@ -1882,6 +1900,14 @@ const ResponsePresentation = (() => {
       `\n\nبرای ادامه می‌توانید بپرسید: «چرا امروز حرکت کرد؟» یا «اگر ۱۰٪ بالا برود چه می‌شود؟»`;
   };
 
+  // Phase 2-3G-CX (P1-2/S3): سطر پیوند دانش‌نامه برای پاسخ‌های تحلیلی — فقط از مدخل واقعی بازیابی‌شده با امتیاز ≥ آستانه کانونیکال (بدون دانش ساختگی)
+  const buildKnowledgeCrossLinkLine = (retrievedKnowledge) => {
+    const results = (retrievedKnowledge && Array.isArray(retrievedKnowledge.results)) ? retrievedKnowledge.results : [];
+    const best = results.find((r) => r && r.title && Number(r.relevanceScore) >= knowledgePresentationMinimum(retrievedKnowledge)) || null;
+    if (!best) return '';
+    return `\n\n📚 **مرتبط از دانش‌نامه:** «${best.title}» — برای متن کامل، همین عنوان را از من بپرسید.`;
+  };
+
   const buildScopeFallbackResponse = (query = '') => {
     return `🧭 **این درخواست در قالب‌های تحلیلی شناخته‌شده قرار نمی‌گیرد.**\n\n` +
       `برای پاسخ دقیق و مستند، یکی از این قالب‌ها را بپرسید:\n` +
@@ -1898,6 +1924,7 @@ const ResponsePresentation = (() => {
     buildComparisonResponse,
     buildAssetSnapshotResponse,
     buildScopeFallbackResponse,
+    buildKnowledgeCrossLinkLine,
     trimKnowledgeContent,
     stripKnowledgeMathMarkup,
     isKnowledgePresentationEligible,
@@ -1977,6 +2004,7 @@ const buildComparisonResponse = ResponsePresentation.buildComparisonResponse;
 const buildAssetSnapshotResponse = ResponsePresentation.buildAssetSnapshotResponse;
 const buildScopeFallbackResponse = ResponsePresentation.buildScopeFallbackResponse;
 const buildWhyResponse = ResponsePresentation.buildWhyResponse;
+const buildKnowledgeCrossLinkLine = ResponsePresentation.buildKnowledgeCrossLinkLine;
 
 // سقف توکن پاسخ بر اساس سیاست طول (SHORT / STANDARD / DEEP)
 const responseTokenCap = (level) => (level === ResponsePresentation.RP_LEVELS.SHORT ? 300
@@ -4790,6 +4818,18 @@ function renderWhatIfResponse(simResult) {
 /**
  * تولید پاسخ تحلیلی هوشمند، زمینه-محور و بلادرنگ برای چت‌بات مشاور دیدبان
  */
+// Phase 2-3G-CX (P1-2/S3): نقشه قطعی جفت‌دارایی → موضوع دانش برای سطر پیوند (فقط topic های موجود در TOPIC_TO_ID_MAP)
+function detectPairKnowledgeTopic(entities) {
+  const vals = (Array.isArray(entities) ? entities : []).map((e) => String((e && e.value) || '').toUpperCase());
+  const has = (a) => vals.includes(a);
+  if (has('USD') && (has('GOLD18') || has('XAU') || has('COIN'))) return 'GOLD_VS_DOLLAR';
+  if (has('OIL') && (has('XAU') || has('GOLD18'))) return 'OIL_GOLD_CORRELATION';
+  if (has('XAU') && has('XAG')) return 'GOLD_TO_SILVER';
+  if (has('USDT') && has('USD')) return 'USDT_SPREAD';
+  if (has('ETH') && has('BTC')) return 'ETH_BTC';
+  return null;
+}
+
 function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEvidence = null, queryAnalysis = null, liveEvidenceItems = []) {
   // Phase 2-3C: پرسش «چرا» — پاسخ قطعی ساختارمند (مشاهده → محرک محتمل → قدرت شاهد → تفسیر → عدم‌قطعیت)
   if (typeof detectWhyQuery === 'function' && detectWhyQuery(userQuery)) {
@@ -4802,6 +4842,15 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     if (_cmpEntities.length >= 2 && (_qEarly.includes('مقایسه') || _qEarly.includes('در برابر') || _qEarly.includes('نسبت به'))) {
       const comparisonReply = buildComparisonResponse(queryAnalysis, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
       if (comparisonReply) return comparisonReply;
+    }
+  }
+  // Phase 2-3G-CX (P1-2/S1): تحلیل رابطه/همبستگی/واگرایی/تأثیر دو دارایی — مسیر قطعی مقایسه‌ای (رفع fallback «تحلیل رابطه X و Y»)
+  {
+    const _relEntities = (queryAnalysis && Array.isArray(queryAnalysis.entities)) ? queryAnalysis.entities : [];
+    const _qRel = String(userQuery || '').toLowerCase();
+    if (_relEntities.length >= 2 && /(رابطه|روابط|همبستگی|واگرایی|هم\u200cجهتی|هم جهتی|تاثیر|تأثیر)/.test(_qRel)) {
+      const relationReply = buildComparisonResponse(queryAnalysis, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
+      if (relationReply) return relationReply;
     }
   }
   const norm = normalizedEvidence || normalizeEvidenceMap(todayEvidence);
