@@ -766,6 +766,8 @@ const KNOWLEDGE_TOPICS = {
   'DXY': ['dxy', 'شاخص دلار آمریکا', 'شاخص دلار', 'دلار جهانی'],
   'PMI': ['pmi', 'شاخص مدیران خرید', 'مدیران خرید'],
   'GOLD_TO_SILVER': ['نسبت طلا به نقره', 'طلا به نقره', 'xau/xag', 'xau xag', 'نسبت اونس طلا به نقره'],
+  // Phase 2-3G-CX (P1-3): پرسش تبدیل واحد اونس→گرم باید به دانش‌نامه برود، نه کارت دارایی
+  'OUNCE_CONVERSION': ['اونس چند گرم', 'انس چند گرم', 'یک اونس چند گرم', 'هر اونس چند گرم', 'اونس برابر چند گرم', 'اونس معادل چند گرم', 'اونس تروی چند گرم'],
   'GOLD_ETF': ['صندوق طلا', 'صندوق های طلا', 'صندوق‌های طلا', 'صندوق عیار', 'صندوق کهربا', 'صندوق زرفام', 'صندوق کالایی طلا', 'gold etf'],
   'COIN_VS_TOKEN': ['تفاوت کوین و توکن', 'فرق کوین و توکن', 'کوین یا توکن', 'کوین و توکن'],
   'HALVING': ['هاوینگ بیت کوین', 'هاوینگ بیت‌کوین', 'هاوینگ', 'halving', 'نصف شدن پاداش بلوک', 'نصف شدن پاداش'],
@@ -1674,13 +1676,16 @@ const ResponsePresentation = (() => {
   };
   const whyDrivers = (asset) => WHY_DRIVERS[String(asset || '').toUpperCase()] || WHY_DRIVERS.DEFAULT;
 
-  const buildWhyResponse = (cir = {}, liveItems = []) => {
+  const buildWhyResponse = (cir = {}, liveItems = [], rawQuery = '') => {
     const entities = (cir && Array.isArray(cir.entities)) ? cir.entities.map((e) => e.value) : [];
     const items = Array.isArray(liveItems) ? liveItems : [];
     const target = entities.length > 0 ? entities.slice(0, 2) : [];
 
     const obsLines = [];
     let maxAbsChange = null;
+    // Phase 2-3G-CX (P1-1): بررسی پیش‌فرض پرسش — جهت ادعاشده در برابر داده واقعی امروز (اولین دارایی هدف با تغییر روزانه معتبر)
+    let premiseFirstCh = null;
+    let premiseFirstAsset = null;
     target.forEach((asset) => {
       const item = items.find((x) => x && x.asset === asset);
       if (!item || item.value === null || item.value === undefined || item.value === '' || !Number.isFinite(Number(item.value))) {
@@ -1692,6 +1697,7 @@ const ResponsePresentation = (() => {
       const chRaw = item.metadata ? item.metadata.change24h : null;
       const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
       if (ch !== null) {
+        if (premiseFirstCh === null) { premiseFirstCh = ch; premiseFirstAsset = asset; }
         const sign = ch > 0 ? '+' : (ch < 0 ? '-' : ''); // FIX-B1-4: حفظ علامت کاهش (formatter فقط قدر مطلق است)
         const flat = Math.abs(ch) < 0.05;
         if (maxAbsChange === null || Math.abs(ch) > maxAbsChange) maxAbsChange = Math.abs(ch);
@@ -1710,7 +1716,21 @@ const ResponsePresentation = (() => {
       `• **${a ? assetLabel(a) : assetsText}:** محرک‌های رایج این بازار (${whyDrivers(a)}) تنها با روند چندروزه/داده تاریخی قابل تفکیک‌اند.\n`
     ).join('');
 
-    return `🔎 **مشاهده (فقط بر پایه داده امروز):**\n` +
+    // Phase 2-3G-CX (P1-1): تصحیح پیش‌فرض — فقط وقتی جهت ادعاشده صریح و یکتا است، داده روزانه موجود و غیرخنثی است و علامت داده خلاف ادعاست.
+    // داده غایب یا خنثی (|تغییر| < ۰٫۰۵٪) ⇒ هیچ ادعایی درباره تناقض نمی‌شود (غایب ≠ صفر).
+    let premiseNote = '';
+    const premiseQ = normalizeText(rawQuery);
+    const claimUp = /(بالا\s*رفت|رشد\s*کرد|گران\s*شد|گرون\s*شد|صعود\s*کرد|جهش\s*(?:کرد|زد)|پرید)/.test(premiseQ);
+    const claimDown = /(ریخت|افت\s*کرد|پایین\s*(?:اومد|آمد)|سقوط\s*کرد|کاهش\s*(?:یافت|داشت|پیدا\s*کرد)|ارزان\s*شد|ارزون\s*شد|نزول\s*کرد)/.test(premiseQ);
+    if ((claimUp !== claimDown) && premiseFirstCh !== null && Math.abs(premiseFirstCh) >= 0.05) {
+      const dataUp = premiseFirstCh > 0;
+      if (dataUp !== claimUp) {
+        const premiseSign = premiseFirstCh > 0 ? '+' : '-';
+        premiseNote = `⚠️ **بررسی پیش‌فرض پرسش:** در پرسش، حرکت «${claimUp ? 'صعودی' : 'نزولی'}» فرض شده، اما داده امروز خلاف آن را نشان می‌دهد: **${assetLabel(premiseFirstAsset)}** امروز **${premiseSign}${fmtNumber(premiseFirstCh, 2)}٪** تغییر داشته است. تحلیل زیر بر مبنای داده واقعی است، نه فرضِ پرسش.\n\n`;
+      }
+    }
+
+    return premiseNote + `🔎 **مشاهده (فقط بر پایه داده امروز):**\n` +
       `${observation}\n\n` +
       `🧭 **محرک‌های محتمل — فقط در چارچوب شواهد:**\n` +
       `• تعیین یک علت واحد برای رفتار امروز «${assetsText}» با داده‌های لحظه‌ای (قیمت و تغییر روزانه) ممکن نیست؛\n` +
@@ -1742,6 +1762,7 @@ const ResponsePresentation = (() => {
     'SIDEWAYS_MARKET': 'بازار ساید/رنج',
     'PRICE_CONSOLIDATION': 'تثبیت قیمت (Consolidation)',
     'HALVING': 'هاوینگ بیت‌کوین',
+    'OUNCE_CONVERSION': 'تبدیل اونس به گرم',
     'GENERAL_FINANCE': 'مفاهیم عمومی مالی'
   };
 
@@ -4772,7 +4793,7 @@ function renderWhatIfResponse(simResult) {
 function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEvidence = null, queryAnalysis = null, liveEvidenceItems = []) {
   // Phase 2-3C: پرسش «چرا» — پاسخ قطعی ساختارمند (مشاهده → محرک محتمل → قدرت شاهد → تفسیر → عدم‌قطعیت)
   if (typeof detectWhyQuery === 'function' && detectWhyQuery(userQuery)) {
-    return buildWhyResponse(queryAnalysis || {}, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : []);
+    return buildWhyResponse(queryAnalysis || {}, Array.isArray(liveEvidenceItems) ? liveEvidenceItems : [], userQuery);
   }
   // FIX-B3-C (Phase 2-3F-B3): مقایسه توصیفی دو دارایی — شاخه اختصاصی پیش از بلوک همبستگی (رفع hijack)
   {
