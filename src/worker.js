@@ -339,6 +339,28 @@ export default {
           }), { headers: corsHeaders });
         }
 
+        // Phase 2-3G-CX (P1-4/S4): پل نوبت دومِ مقدار — پاسخ فقط-عددی («۱۰ درصد») بلافاصله پس از
+        // شفاف‌سازی مقدار شوک (مارکر فریزشده P0-1). شرط دوگانه سخت: (۱) پیام فقط عدد±درصد باشد و
+        // (۲) آخرین پیام دستیار در history حاوی مارکر و فیلدهای ساخت‌یافته دارایی/جهت خودمان باشد.
+        // دارایی و جهت فقط از متن خودِ سامانه بازخوانی می‌شود (هیچ حدسی از کاربر زده نمی‌شود)؛
+        // سپس پرسش مؤثر کامل ساخته شده و از مسیر عادی موتور (analyzeQuery + parseWhatIfQuery) می‌گذرد.
+        let s4EffectiveMsg = null;
+        {
+          const s4BareNum = userMsg.match(/^\s*([0-9۰-۹]+(?:[.,٫][0-9۰-۹]+)?)\s*(?:درصد|٪|%)?\s*[.!؟?]?\s*$/);
+          if (s4BareNum) {
+            const s4LastAssistant = [...history].reverse().find(h => h && h.role !== 'user');
+            const s4LastText = s4LastAssistant ? String(s4LastAssistant.text || s4LastAssistant.content || '') : '';
+            if (s4LastText.includes('نیازمند شفاف\u200cسازی مقدار شوک (Magnitude Required)')) {
+              const s4Asset = s4LastText.match(/دارایی:\s*\*\*([^*]+)\*\*/);
+              const s4Dir = s4LastText.match(/جهت:\s*\*\*(صعودی|نزولی)\*\*/);
+              if (s4Asset && s4Dir) {
+                const s4DirWord = s4Dir[1] === 'نزولی' ? 'پایین' : 'بالا';
+                s4EffectiveMsg = 'اگر ' + s4Asset[1].trim() + ' ' + s4BareNum[1] + '٪ ' + s4DirWord + ' برود چه می\u200cشود؟';
+              }
+            }
+          }
+        }
+
         let replyText = '';
         let sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
 
@@ -351,7 +373,10 @@ export default {
           body.queryAnalysis.intent && body.queryAnalysis.context && body.queryAnalysis.context.resolutionPath)
           ? body.queryAnalysis
           : null;
-        const queryAnalysis = clientCir || analyzeQuery(userMsg, analysisHistory, todayEvidence);
+        // Phase 2-3G-CX (P1-4/S4): وقتی پل مقدار فعال است، پرسش مؤثر کامل جایگزین می‌شود (مقدم بر CIR کلاینت، چون اطلاعات قطعی از متن خود سامانه است)
+        const queryAnalysis = s4EffectiveMsg
+          ? analyzeQuery(s4EffectiveMsg, analysisHistory, todayEvidence)
+          : (clientCir || analyzeQuery(userMsg, analysisHistory, todayEvidence));
 
         // FIX-B2-2 (Phase 2-3F-B2): ایمنی مستقل ورکر — تشخیص قطعی افق زمانی از متن کاربر حتی بدون CIR
         if (queryAnalysis && typeof queryAnalysis === 'object') {
@@ -505,7 +530,7 @@ export default {
 
         // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی
         if (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON') {
-          let whatIfAst = parseWhatIfQuery(userMsg, history);
+          let whatIfAst = parseWhatIfQuery(s4EffectiveMsg || userMsg, history); // Phase 2-3G-CX (P1-4/S4)
           // Phase 2-3G-CX (P0-1): ابهام «مقدار» جدا نگه داشته می‌شود تا مسیر بازسازی سناریوی حافظه (2-3C/2-3E-B) بدون هیچ تغییری اجرا شود
           let whatIfMagnitudeClarify = null;
           if (whatIfAst && whatIfAst.status === 'AMBIGUOUS' && Array.isArray(whatIfAst.missing) && whatIfAst.missing.includes('magnitude')) {
