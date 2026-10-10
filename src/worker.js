@@ -506,6 +506,12 @@ export default {
         // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی
         if (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON') {
           let whatIfAst = parseWhatIfQuery(userMsg, history);
+          // Phase 2-3G-CX (P0-1): ابهام «مقدار» جدا نگه داشته می‌شود تا مسیر بازسازی سناریوی حافظه (2-3C/2-3E-B) بدون هیچ تغییری اجرا شود
+          let whatIfMagnitudeClarify = null;
+          if (whatIfAst && whatIfAst.status === 'AMBIGUOUS' && Array.isArray(whatIfAst.missing) && whatIfAst.missing.includes('magnitude')) {
+            whatIfMagnitudeClarify = whatIfAst;
+            whatIfAst = null;
+          }
           // Phase 2-3C: پیگیری سناریویی بدون دارایی/جهت صریح — بازسازی پرسش مؤثر از سناریوی حل‌شده حافظه کاری
           if (!whatIfAst) {
             // FIX-4 (Phase 2-3E-B): پیام دارای بیش از یک شوک درصدی مستقل، هرگز به سناریوی تک‌دارایی قبلی تقلیل نمی‌یابد
@@ -534,6 +540,8 @@ export default {
               whatIfAst = parseWhatIfQuery(effectiveWhatIfQuery, history);
             }
           }
+          // Phase 2-3G-CX (P0-1): بازسازی از حافظه ممکن نشد → پل شفاف‌سازی مقدار شوک (نه fallback عمومی)
+          if (!whatIfAst && whatIfMagnitudeClarify) whatIfAst = whatIfMagnitudeClarify;
           if (whatIfAst) {
             let whatIfReply = '';
             if (whatIfAst.type === 'MULTI_SCENARIO_COMPARISON') {
@@ -4323,6 +4331,7 @@ function parseSingleWhatIf(text, recentContext = []) {
     'گرون بشه', 'گران شود', 'گرونتر بشه', 'گرانتر شود', 'گرانتر بشود',
     'تقویت شود', 'تقویت بشه', 'قوی‌تر شود', 'قوی تر بشه',
     'پامپ کند', 'پامپ بشه', 'پامپ شود', 'پامپ',
+    'بالاتر بره', 'بالاتر برود', 'گرون\u200cتر بشه', 'گران\u200cتر شود',
     'بالا', 'رشد', 'صعود', 'افزایشی', 'مثبت'
   ];
 
@@ -4338,6 +4347,7 @@ function parseSingleWhatIf(text, recentContext = []) {
     'سقوط کند', 'سقوط کنه', 'سقوط داشته باشد', 'سقوط داشته باشه', 'سقوط',
     'تضعیف شود', 'تضعیف بشه',
     'دامپ کند', 'دامپ بشه', 'دامپ شود', 'دامپ',
+    'پایین\u200cتر بره', 'پایین\u200cتر برود', 'پایینتر بره', 'ارزون\u200cتر بشه', 'ارزان\u200cتر شود',
     'پایین', 'افت', 'ریزش', 'کاهش', 'نزول', 'کاهشی', 'منفی'
   ];
 
@@ -4454,6 +4464,19 @@ function parseSingleWhatIf(text, recentContext = []) {
   if (assumptions.length === 0) {
     if (HALF_TERMS.some(t => text.includes(t)) || text.match(/[0-9]+\s*(?:درصد|٪)/)) {
       return { status: 'AMBIGUOUS', missing: ['asset'], rawQuery: text };
+    }
+    // Phase 2-3G-CX (P0-1): دارایی و جهت صریح‌اند اما مقدار شوک ذکر نشده → ابهام «مقدار» (پل شفاف‌سازی به‌جای fallback عمومی).
+    // گارد: پرسش‌های علت/پیش‌بینی به این پل نمی‌آیند تا مسیرهای WHY و Forecast-Guard دست‌نخورده بمانند.
+    if (!/(چرا|علت|دلیل|چطور\s*شد|پیش‌بینی|پیش\s*بینی|فردا|پس‌فردا|هفته|ماه\s*آینده|سال\s*آینده)/i.test(text)) {
+      for (const clause of clauses) {
+        const clauseAsset = detectAsset(clause);
+        if (!clauseAsset) continue;
+        const clauseDown = DOWN_TERMS.some(t => clause.includes(t));
+        const clauseUp = !clauseDown && UP_TERMS.some(t => clause.includes(t));
+        if (clauseUp || clauseDown) {
+          return { status: 'AMBIGUOUS', missing: ['magnitude'], asset: clauseAsset, direction: clauseDown ? 'DOWN' : 'UP', rawQuery: text };
+        }
+      }
     }
     return null;
   }
@@ -4667,6 +4690,19 @@ function executeMultiScenarioComparison(multiAst, normalizedEvidence) {
 
 function renderWhatIfResponse(simResult) {
   if (!simResult) return '';
+
+  // Phase 2-3G-CX (P0-1): ابهام «مقدار شوک» — دارایی و جهت معلوم، فقط درصد لازم است (هیچ مقداری پیش‌فرض نمی‌شود)
+  if (simResult.status === 'AMBIGUOUS' && Array.isArray(simResult.missing) && simResult.missing.includes('magnitude')) {
+    const CLARIFY_LABELS = { USD: 'دلار آزاد', XAU: 'اونس جهانی طلا', XAG: 'نقره جهانی', GOLD18: 'طلای ۱۸ عیار', COIN: 'سکه امامی', USDT: 'تتر', OIL: 'نفت', TSE_INDEX: 'شاخص بورس' };
+    const faLabel = CLARIFY_LABELS[String(simResult.asset || '').toUpperCase()] || 'دارایی موردنظر';
+    const dirFa = simResult.direction === 'DOWN' ? 'نزولی' : 'صعودی';
+    const dirWord = simResult.direction === 'DOWN' ? 'پایین' : 'بالا';
+    return `❓ **نیازمند شفاف‌سازی مقدار شوک (Magnitude Required):**\n\n` +
+      `سناریوی فرضی شما دریافت شد — دارایی: **${faLabel}** | جهت: **${dirFa}** — اما مقدار تغییر مشخص نیست و هیچ مقداری به‌صورت پیش‌فرض فرض نمی‌شود (سناریو ≠ پیش‌بینی).\n\n` +
+      `💡 **کافی است درصد تغییر را مشخص کنید؛ مثلاً:**\n` +
+      `• *اگر ${faLabel} ۵٪ ${dirWord} برود چه می‌شود؟*\n` +
+      `• *اگر ${faLabel} ۱۰٪ ${dirWord} برود چه می‌شود؟*`;
+  }
 
   if (simResult.status === 'AMBIGUOUS') {
     return `❓ **نیازمند شفاف‌سازی متغیر فرضی:**\n\n` +
