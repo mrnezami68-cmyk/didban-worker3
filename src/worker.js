@@ -608,6 +608,21 @@ export default {
 
         // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی
         if (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON') {
+          // Phase 2-3H (M4): دارایی‌های بسته گسترش (یورو/پوند/درهم/DXY/زیرسکه‌ها) خارج از دامنه شبیه‌ساز What-If هستند — پاسخ شفاف، بدون عدد ساختگی
+          const m4WhatIfOutOfScope = /(یورو|پوند|درهم|شاخص\s*دلار|dxy|نیم[\s\u200c]*سکه|ربع[\s\u200c]*سکه|سکه[\s\u200c]*گرمی)/i.test(String(s4EffectiveMsg || userMsg));
+          if (m4WhatIfOutOfScope) {
+            const m4ScopeReply = '🔎 **خارج از دامنه شبیه‌ساز سناریو**\n\nشبیه‌سازی فرضی (What-If) فعلاً فقط برای دارایی‌های پایه (دلار آزاد، اونس جهانی، طلای ۱۸ عیار، سکه امامی، نقره جهانی) فعال است.\n\nبرای یورو، پوند انگلیس، درهم امارات، شاخص دلار (DXY)، نیم‌سکه، ربع‌سکه و سکه گرمی در حال حاضر فقط «قیمت لحظه‌ای و تغییر روزانه» ارائه می‌شود و سناریوی فرضی برایشان محاسبه نمی‌شود؛ تا فراهم‌شدن مبنای محاسباتی معتبر، هیچ عدد فرضی نمایش داده نمی‌شود.\n\nمی‌توانید قیمت لحظه‌ای همین دارایی را بپرسید (مثلاً «یورو چنده؟») یا سناریو را روی دارایی‌های پایه اجرا کنید.';
+            return new Response(JSON.stringify({
+              success: true,
+              reply: m4ScopeReply,
+              source: 'WHAT_IF_SCOPE_GUARD',
+              responseLevel: RESPONSE_LEVELS.SHORT,
+              interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+              retrievedKnowledge,
+              unifiedEvidence: unifiedEvidenceContract,
+              timestamp: new Date().toISOString()
+            }), { headers: corsHeaders });
+          }
           let whatIfAst = parseWhatIfQuery(s4EffectiveMsg || userMsg, history); // Phase 2-3G-CX (P1-4/S4)
           // Phase 2-3G-CX (P0-1): ابهام «مقدار» جدا نگه داشته می‌شود تا مسیر بازسازی سناریوی حافظه (2-3C/2-3E-B) بدون هیچ تغییری اجرا شود
           let whatIfMagnitudeClarify = null;
@@ -893,7 +908,15 @@ const ASSET_TAXONOMY = {
   USD: ['دلار آزاد', 'دلار کاغذی', 'دلار تهران', 'اسکناس دلار', 'دلار نقد', 'دلار بازار', 'دلار', 'usd'],
   USDT: ['تتر دیجیتال', 'دلار دیجیتال', 'تتر بازار', 'تتر', 'usdt'],
   GOLD18: ['طلای ۱۸ عیار', 'طلا ۱۸ عیار', 'طلای 18 عیار', 'طلای ۱۸', 'طلا ۱۸', 'طلای هجده', 'طلای ۱۷ عیار', 'طلای ۱۷', 'مظنه مثقال', 'مظنه', 'مثقال طلا', 'مثقال', 'طلای آب‌شده', 'طلای اب شده', 'طلای آب شده', 'آب‌شده', 'آب شده', 'گرم طلا', 'طلا', 'gold18', 'gold'],
-  COIN: ['سکه تمام طرح جدید', 'سکه طرح جدید', 'سکه تمام بهار', 'سکه امامی', 'سکه تمام', 'تمام سکه', 'ربع سکه', 'نیم سکه', 'سکه بهار آزادی', 'سکه', 'sekee', 'coin'],
+  // Phase 2-3H (M4): اصلاح موظف نقشه‌راه — «ربع سکه/نیم سکه» از COIN خارج شد (رفع «سکوتِ غلط»)؛ «سکه» بدون قید = امامی (فریز)
+  COIN: ['سکه تمام طرح جدید', 'سکه طرح جدید', 'سکه تمام بهار', 'سکه امامی', 'سکه تمام', 'تمام سکه', 'سکه بهار آزادی', 'سکه', 'sekee', 'coin'],
+  // Phase 2-3H (M4): موجودیت‌های جدید — فقط قیمت/تغییر روزانه؛ خارج از دامنه What-If و حباب
+  COIN_HALF: ['نیم سکه بهار', 'نیم سکه', 'نیم‌سکه', 'سکه نیم', 'nim'],
+  COIN_QUARTER: ['ربع سکه بهار', 'ربع سکه', 'ربع‌سکه', 'سکه ربع', 'rob'],
+  COIN_GRAM: ['سکه گرمی', 'سکه یک گرمی', 'سکه ی گرمی', 'gerami'],
+  EUR: ['یورو اروپا', 'یورو', 'eur', 'euro'],
+  GBP: ['پوند انگلیس', 'پوند استرلینگ', 'پوند', 'gbp', 'pound'],
+  AED: ['درهم امارات', 'درهم', 'aed', 'dirham'],
   XAU: ['اونس جهانی طلا', 'انس جهانی طلا', 'اونس جهانی', 'انس جهانی', 'اونس طلا', 'انس طلا', 'اونس', 'انس', 'xau', 'gold ounce'],
   XAG: ['اونس جهانی نقره', 'انس جهانی نقره', 'اونس نقره', 'انس نقره', 'نقره جهانی', 'نقره ۹۹۹', 'نقره', 'xag', 'silver'],
   OIL: ['نفت خام برنت', 'نفت برنت', 'نفت سنگین', 'نفت wti', 'نفت خام', 'نفت', 'oil', 'brent'],
@@ -964,7 +987,8 @@ function extractEntities(text) {
   if (!text) return [];
   const s = String(text).toLowerCase();
   const detected = [];
-  const priorityKeys = ['XAU', 'XAG', 'TSE_EQUAL', 'TSE_INDEX', 'USDT', 'USD', 'COIN', 'GOLD18', 'BTC', 'ETH', 'SOL', 'OIL', 'DXY'];
+  // Phase 2-3H (M4): زیرسکه‌ها پیش از COIN و ارزهای جدید پس از USD — صرفاً افزایشی، ترتیب موجودیت‌های قبلی دست‌نخورده
+  const priorityKeys = ['XAU', 'XAG', 'TSE_EQUAL', 'TSE_INDEX', 'USDT', 'USD', 'EUR', 'GBP', 'AED', 'COIN_HALF', 'COIN_QUARTER', 'COIN_GRAM', 'COIN', 'GOLD18', 'BTC', 'ETH', 'SOL', 'OIL', 'DXY'];
 
   for (const key of priorityKeys) {
     const synonyms = ASSET_TAXONOMY[key];
@@ -974,6 +998,15 @@ function extractEntities(text) {
         break;
       }
     }
+  }
+
+  // Phase 2-3H (M4): سرکوب تطبیق عمومی «سکه» (زیررشته داخل «نیم/ربع سکه») وقتی زیرسکه صریح تشخیص داده شده؛
+  // تطبیق صریح COIN (مثل «سکه امامی») حفظ می‌شود.
+  const hasSubCoin = detected.some((e) => e.value === 'COIN_HALF' || e.value === 'COIN_QUARTER' || e.value === 'COIN_GRAM');
+  if (hasSubCoin) {
+    const subCoinBahaar = /(نیم|ربع)[\s\u200c]*سکه بهار/.test(s);
+    const genericCoinIdx = detected.findIndex((e) => e.value === 'COIN' && (e.raw === 'سکه' || (subCoinBahaar && e.raw === 'سکه بهار آزادی')));
+    if (genericCoinIdx !== -1) detected.splice(genericCoinIdx, 1);
   }
 
   return detected;
@@ -1445,7 +1478,13 @@ const ResponsePresentation = (() => {
     SOL: 'سولانا',
     DXY: 'شاخص دلار (DXY)',
     SILVER1G: 'نقره (هر گرم)',
-    MITHQAL17: 'مثقال طلای ۱۷ عیار'
+    MITHQAL17: 'مثقال طلای ۱۷ عیار',
+    EUR: 'یورو',
+    GBP: 'پوند انگلیس',
+    AED: 'درهم امارات',
+    COIN_HALF: 'نیم‌سکه بهار آزادی',
+    COIN_QUARTER: 'ربع‌سکه بهار آزادی',
+    COIN_GRAM: 'سکه گرمی'
   };
 
   const assetLabel = (asset) => ASSET_LABELS[String(asset || '').toUpperCase()] || String(asset || 'دارایی');
@@ -3680,9 +3719,13 @@ function historicalWindowDays(tf) {
 async function fetchHistoricalEvidence(entities, tf, env) {
   const windowDays = historicalWindowDays(tf);
   if (!windowDays) return [];
-  const explicit = (Array.isArray(entities) ? entities : [])
+  const provided = (Array.isArray(entities) ? entities : [])
     .map((e) => String((e && e.value) || '').toUpperCase())
-    .filter((a) => HISTORICAL_ASSET_KEY_MAP[a]);
+    .filter(Boolean);
+  const explicit = provided.filter((a) => HISTORICAL_ASSET_KEY_MAP[a]);
+  // Phase 2-3H (M4): موجودیت صریح بدون پوشش تاریخی (مثل یورو/درهم/نیم‌سکه) ⇒ بازگشت صادقانه خالی —
+  // هرگز چهار دارایی پیش‌فرض جایگزین دارایی درخواستی نمی‌شود (مسیر degraded صادقانه فعال می‌ماند)
+  if (provided.length > 0 && explicit.length === 0) return [];
   const targetAssets = explicit.length > 0 ? [...new Set(explicit)] : ['USD', 'GOLD18', 'COIN', 'XAU'];
   const keys = targetAssets.map((a) => HISTORICAL_ASSET_KEY_MAP[a]);
   const series = await fetchDailySeries(keys, windowDays, env);
@@ -4213,7 +4256,8 @@ function normalizePriceContract(rawVal, assetKey, source = 'LIVE', baselineMap =
 function normalizeEvidenceMap(todayEvidence = {}) {
   const map = {};
   // FIX-B1-1 (Phase 2-3F-B1): دارایی‌های دیجیتال (BTC/ETH/SOL) نیز در نرمال‌سازی حفظ می‌شوند
-  const keys = ['usd', 'usdt', 'gold18', 'sekee', 'xau', 'xag', 'oil', 'tse_index', 'tse_equal', 'silver1g', 'btc', 'eth', 'sol'];
+  // Phase 2-3H (M4): کلیدهای بسته گسترش (eur/gbp/aed/dxy/nim/rob/gerami) — صرفاً افزایشی
+  const keys = ['usd', 'usdt', 'gold18', 'sekee', 'xau', 'xag', 'oil', 'tse_index', 'tse_equal', 'silver1g', 'btc', 'eth', 'sol', 'eur', 'gbp', 'aed', 'dxy', 'nim', 'rob', 'gerami'];
   for (const k of keys) {
     const item = todayEvidence[k];
     const norm = normalizePriceContract(item, k.toUpperCase(), (item && item.source) || 'LIVE', map);
@@ -4293,7 +4337,14 @@ const EVIDENCE_ASSET_KEY_MAP = {
   btc: { asset: 'BTC', unit: 'USD' },
   eth: { asset: 'ETH', unit: 'USD' },
   sol: { asset: 'SOL', unit: 'USD' },
-  dxy: { asset: 'DXY', unit: 'INDEX_POINT' }
+  dxy: { asset: 'DXY', unit: 'INDEX_POINT' },
+  // Phase 2-3H (M4): موجودیت‌های بسته گسترش — نگاشت کلید شواهد به دارایی کانونیکال
+  eur: { asset: 'EUR', unit: 'TOMAN' },
+  gbp: { asset: 'GBP', unit: 'TOMAN' },
+  aed: { asset: 'AED', unit: 'TOMAN' },
+  nim: { asset: 'COIN_HALF', unit: 'TOMAN' },
+  rob: { asset: 'COIN_QUARTER', unit: 'TOMAN' },
+  gerami: { asset: 'COIN_GRAM', unit: 'TOMAN' }
 };
 
 /**
