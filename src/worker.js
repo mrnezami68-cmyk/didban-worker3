@@ -361,6 +361,37 @@ export default {
           }
         }
 
+        // Phase 2-3H (M6/T2): پل S6 — پاسخ برهنهٔ نام دارایی («دلار») بلافاصله پس از شفاف‌سازی دارایی
+        // (متن M6/T1 با فیلدهای ساخت‌یافتهٔ مقدار/جهت). شرط سه‌گانهٔ سخت:
+        // (۱) پیام کوتاه فقط-حروف بدون رقم/درصد/واژه پرسشی باشد و دقیقاً یک موجودیت دارایی بدهد،
+        // (۲) آخرین پیام دستیار حاوی سرآیند شفاف‌سازی متغیر فرضی و هر دو فیلد مقدار/جهت باشد،
+        // (۳) مقدار بازخوانی‌شده معتبر باشد. مقدار و جهت فقط از متن خودِ سامانه بازخوانی می‌شود
+        // (هیچ حدسی از کاربر زده نمی‌شود)؛ سپس پرسش مؤثر کامل از مسیر عادی موتور می‌گذرد.
+        // null باربر v254-B4 دست‌نخورده است: این پل پارسر را لمس نمی‌کند، فقط پیام مؤثر می‌سازد.
+        let s6EffectiveMsg = null;
+        if (!s4EffectiveMsg) {
+          const s6Bare = userMsg.trim();
+          const s6LooksBareAsset = s6Bare.length > 0 && s6Bare.length <= 24 &&
+            /^[\u0600-\u06FF\u200c\s]+$/.test(s6Bare) &&
+            !/[0-9\u06F0-\u06F9]|٪|%/.test(s6Bare) &&
+            !/(چند|چقدر|چیه|چیست|قیمت|نرخ|چرا|بخر|بفروش)/.test(s6Bare);
+          if (s6LooksBareAsset) {
+            const s6Entities = extractEntities(s6Bare);
+            if (Array.isArray(s6Entities) && s6Entities.length === 1 && s6Entities[0] && s6Entities[0].raw) {
+              const s6LastAssistant = [...history].reverse().find(h => h && h.role !== 'user');
+              const s6LastText = s6LastAssistant ? String(s6LastAssistant.text || s6LastAssistant.content || '') : '';
+              if (s6LastText.includes('متغیر فرضی (Clarification Required)')) {
+                const s6Val = s6LastText.match(/مقدار:\s*\*\*([0-9\u06F0-\u06F9]+(?:[.,\u066B][0-9\u06F0-\u06F9]+)?)\s*٪\*\*/);
+                const s6Dir = s6LastText.match(/جهت:\s*\*\*(صعودی|نزولی)\*\*/);
+                if (s6Val && s6Dir) {
+                  const s6DirWord = s6Dir[1] === 'نزولی' ? 'پایین' : 'بالا';
+                  s6EffectiveMsg = 'اگر ' + s6Entities[0].raw + ' ' + s6Val[1] + '٪ ' + s6DirWord + ' برود چه می\u200cشود؟';
+                }
+              }
+            }
+          }
+        }
+
         let replyText = '';
         let sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
 
@@ -374,9 +405,12 @@ export default {
           ? body.queryAnalysis
           : null;
         // Phase 2-3G-CX (P1-4/S4): وقتی پل مقدار فعال است، پرسش مؤثر کامل جایگزین می‌شود (مقدم بر CIR کلاینت، چون اطلاعات قطعی از متن خود سامانه است)
+        // Phase 2-3H (M6/T2): پل دارایی (S6) نیز مانند S4 مقدم بر CIR کلاینت است (اطلاعات قطعی از متن خود سامانه)
         const queryAnalysis = s4EffectiveMsg
           ? analyzeQuery(s4EffectiveMsg, analysisHistory, todayEvidence)
-          : (clientCir || analyzeQuery(userMsg, analysisHistory, todayEvidence));
+          : (s6EffectiveMsg
+            ? analyzeQuery(s6EffectiveMsg, analysisHistory, todayEvidence)
+            : (clientCir || analyzeQuery(userMsg, analysisHistory, todayEvidence)));
 
         // FIX-B2-2 (Phase 2-3F-B2): ایمنی مستقل ورکر — تشخیص قطعی افق زمانی از متن کاربر حتی بدون CIR
         if (queryAnalysis && typeof queryAnalysis === 'object') {
@@ -416,9 +450,21 @@ export default {
 
         // ۳. کشف ابهام و درخواست شفاف‌سازی بدون حدس‌های پرریسک مالی
         if (queryAnalysis.intent.primary === 'CLARIFICATION_REQUIRED') {
+          // Phase 2-3H (M6/T1): فیلدهای ساخت‌یافتهٔ مقدار/جهت — استخراج قطعی از متن کاربر؛ بدون هیچ حدسی.
+          // اگر هر دو قابل‌استخراج نباشند، فیلدی چاپ نمی‌شود و پل S6 نوبت بعد فعال نخواهد شد (fail-safe).
+          let m6Captured = '';
+          {
+            const m6Val = userMsg.match(/([0-9\u06F0-\u06F9]+(?:[.,\u066B][0-9\u06F0-\u06F9]+)?)\s*(?:درصد|٪|%)/);
+            const m6Up = /(بالا|رشد|صعود|افزایش|جهش|بپر)/.test(userMsg);
+            const m6Down = /(پایین|افت|ریز|سقوط|کاهش)/.test(userMsg);
+            if (m6Val && (m6Up !== m6Down)) {
+              m6Captured = '\n\nآنچه از درخواست شما ثبت شد:\nمقدار: **' + ResponsePresentation.toFaDigits(m6Val[1]) + '٪** | جهت: **' + (m6Down ? 'نزولی' : 'صعودی') + '**';
+            }
+          }
+
           return new Response(JSON.stringify({
             success: true,
-            reply: '❓ **نیازمند شفاف‌سازی متغیر فرضی (Clarification Required):**\n\nدرخواست سناریوی فرضی شما دریافت شد، اما مشخص نگردید شوک مدنظر بر کدام دارایی (دلار آزاد، اونس جهانی طلا، سکه یا طلای ۱۸ عیار) اعمال شود.\n\n💡 **پیشنهادهای سناریویی:**\n• *اگر دلار ۱۰ درصد رشد کند، قیمت طلا و سکه چقدر می‌شود؟*\n• *اگر اونس ۲۰۰ دلار افت کند و دلار ۲۸۰ هزار تومان شود چه تغییری رخ می‌دهد؟*',
+            reply: '❓ **نیازمند شفاف‌سازی متغیر فرضی (Clarification Required):**\n\nدرخواست سناریوی فرضی شما دریافت شد، اما مشخص نگردید شوک مدنظر بر کدام دارایی (دلار آزاد، اونس جهانی طلا، سکه یا طلای ۱۸ عیار) اعمال شود.' + m6Captured + '\n\n❓ شوک روی **کدام دارایی** اعمال شود؟ (مثلاً: دلار، طلا، سکه امامی، اونس جهانی، تتر)\nکافی است فقط نام دارایی را بنویسید.\n\n💡 **پیشنهادهای سناریویی:**\n• *اگر دلار ۱۰ درصد رشد کند، قیمت طلا و سکه چقدر می‌شود؟*\n• *اگر اونس ۲۰۰ دلار افت کند و دلار ۲۸۰ هزار تومان شود چه تغییری رخ می‌دهد؟*',
             source: 'CLARIFICATION_ENGINE',
             interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
             retrievedKnowledge,
