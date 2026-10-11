@@ -955,7 +955,16 @@ const KNOWLEDGE_TOPICS = {
   'ETH_BTC': ['نسبت eth به btc', 'نسبت اتریوم به بیت‌کوین', 'نسبت اتریوم به بیت کوین', 'eth/btc', 'eth btc'],
   'DIVERSIFICATION': ['تنوع بخشی', 'تنوع‌بخشی', 'diversification', 'ریسک تمرکز', 'concentration risk', 'تمرکز سبد'],
   'GOLD_PURITY': ['عیار طلا', 'عیار طلا چیست', 'خلوص طلا', 'طلای ۲۴ عیار', 'طلای ۲۴', 'gold purity'],
-  'CORRELATION': ['تفاوت همبستگی و علیت', 'همبستگی و علیت', 'همبستگی', 'correlation', 'علیت', 'causation', 'correlation vs causation']
+  'CORRELATION': ['تفاوت همبستگی و علیت', 'همبستگی و علیت', 'همبستگی', 'correlation', 'علیت', 'causation', 'correlation vs causation'],
+  // Phase 2-3H (M5): دانش‌نامه دسته ۲ — صورت‌های مفهومی طبق درس S1/S2؛ گیت چنده/چقدره مسیرهای قیمتی را حفظ می‌کند
+  'COIN_TYPES': ['انواع سکه', 'وزن سکه', 'عیار سکه', 'مشخصات سکه', 'نیم سکه چیست', 'ربع سکه چیست', 'سکه گرمی چیست', 'فرق سکه امامی', 'تفاوت سکه امامی'],
+  'HALF_COIN_BUBBLE': ['حباب نیم سکه', 'حباب نیم‌سکه', 'چرا نیم سکه حباب دارد', 'پرمیوم نیم سکه'],
+  'GRAM_COIN_BUBBLE': ['حباب سکه گرمی', 'چرا سکه گرمی حباب دارد', 'پرمیوم سکه گرمی'],
+  'USD_RATE_TIERS': ['دلار توافقی', 'دلار نیمایی', 'ارز نیمایی', 'نرخ نیمایی', 'ارز چندنرخی', 'چندنرخی ارز', 'تفاوت دلار آزاد و نیمایی', 'مرکز مبادله'],
+  'FED_POLICY': ['فدرال رزرو', 'نرخ بهره فدرال', 'fomc', 'بانک مرکزی آمریکا', 'جلسه فدرال'],
+  'LIQUIDITY': ['نقدشوندگی', 'نقد شوندگی', 'لیکوییدیتی', 'liquidity', 'عمق بازار'],
+  'BID_ASK_SPREAD': ['اسپرد خرید و فروش', 'اسپرد خرید فروش', 'اختلاف قیمت خرید و فروش', 'اسپرد چیست', 'bid ask', 'اسپرد معاملاتی'],
+  'FUND_NAV': ['ارزش ابطال', 'nav', 'ان ای وی', 'ارزش خالص دارایی', 'پرمیوم صندوق']
 };
 
 // Phase 2-3F-B3: تطبیق مرزدار مترادف‌های لاتین (ضد نشت زیررشته‌ای مانند 'sol' در 'consolidation')
@@ -3410,7 +3419,16 @@ const TOPIC_TO_ID_MAP = {
   'OIL_GOLD_CORRELATION': ['oil_gold_correlation'],
   'HALVING': ['bitcoin_fundamentals'],
   'SIDEWAYS_MARKET': ['sideways_market_dynamics', 'sideways_market'],
-  'PRICE_CONSOLIDATION': ['price_consolidation_regimes', 'price_consolidation']
+  'PRICE_CONSOLIDATION': ['price_consolidation_regimes', 'price_consolidation'],
+  // Phase 2-3H (M5): دانش‌نامه دسته ۲
+  'COIN_TYPES': ['coin_types_specs'],
+  'HALF_COIN_BUBBLE': ['coin_half_bubble'],
+  'GRAM_COIN_BUBBLE': ['coin_gram_bubble'],
+  'USD_RATE_TIERS': ['usd_rate_tiers'],
+  'FED_POLICY': ['fed_policy_transmission'],
+  'LIQUIDITY': ['liquidity_concept'],
+  'BID_ASK_SPREAD': ['bid_ask_spread_concept'],
+  'FUND_NAV': ['fund_nav_concept']
 };
 
 // ============================================================================
@@ -5735,6 +5753,10 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
 
   // ۶. پاسخ به تحلیل حباب سکه، طلای ۱۸ عیار و طلای آب‌شده
   if (isBubbleQuery) {
+    // Phase 2-3H (M5 — تکمیل تعهد شفافیت M4): حباب زیرسکه‌ها (نیم/ربع/گرمی) در دامنه موتور حباب نیست — یادداشت صادقانه، بدون عدد ساختگی
+    const m5SubCoinBubbleNote = /(نیم[\s\u200c]*سکه|ربع[\s\u200c]*سکه|سکه[\s\u200c]*گرمی)/.test(q)
+      ? `\n\n🔎 **توضیح شفاف:** محاسبه عددی حباب نیم‌سکه، ربع‌سکه و سکه گرمی در دامنه فعلی موتور حباب نیست؛ محاسبه بالا مربوط به سکه تمام امامی و طلای ۱۸ عیار است و هیچ عدد فرضی برای قطعات خرد ارائه نمی‌شود.`
+      : '';
     let liveBubbleDetails = '';
     if (coinIntrinsic !== null) {
       liveBubbleDetails = `\n### 📌 محاسبه زنده حباب تابلوی امروز:\n` +
@@ -5766,7 +5788,8 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
       `   - **زیر ۱۵٪:** محدوده تعادلی و کم‌ریسک تاریخی.\n` +
       `   - **۱۵٪ تا ۲۵٪:** محدوده گرم با اضافه ارزش ناشی از تقاضای انتظاری و تورمی.\n` +
       `   - **بالای ۲۵٪:** محدوده پرریسک و آسیب‌پذیر نسبت به اصلاح نرخ ارز یا حباب‌زدایی.\n\n` +
-      `• **نکته تخصصی پورتفوی:** در شرایطی که حباب سکه بالای ۲۰٪ قرار می‌گیرد، طلای آب‌شده به دلیل فاقد بودن حق ضرب و حباب سفته‌بازی، ضریب ریسک نوسانی پایین‌تری نسبت به مسکوکات دارد.`;
+      `• **نکته تخصصی پورتفوی:** در شرایطی که حباب سکه بالای ۲۰٪ قرار می‌گیرد، طلای آب‌شده به دلیل فاقد بودن حق ضرب و حباب سفته‌بازی، ضریب ریسک نوسانی پایین‌تری نسبت به مسکوکات دارد.` +
+      m5SubCoinBubbleNote;
   }
 
   // ۷. پاسخ به تحلیل بازار بورس و شاخص‌ها
