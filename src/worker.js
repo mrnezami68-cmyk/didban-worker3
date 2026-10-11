@@ -655,7 +655,7 @@ export default {
         // ۴. شبیه‌ساز قطعی What-If و مقایسه سناریویی
         if (queryAnalysis.intent.primary === 'WHAT_IF' || queryAnalysis.intent.primary === 'SCENARIO_COMPARISON') {
           // Phase 2-3H (M4): دارایی‌های بسته گسترش (یورو/پوند/درهم/DXY/زیرسکه‌ها) خارج از دامنه شبیه‌ساز What-If هستند — پاسخ شفاف، بدون عدد ساختگی
-          const m4WhatIfOutOfScope = /(یورو|پوند|درهم|شاخص\s*دلار|dxy|نیم[\s\u200c]*سکه|ربع[\s\u200c]*سکه|سکه[\s\u200c]*گرمی)/i.test(String(s4EffectiveMsg || userMsg));
+          const m4WhatIfOutOfScope = /(یورو|پوند|درهم|شاخص\s*دلار|dxy|نیم[\s\u200c]*سکه|ربع[\s\u200c]*سکه|سکه[\s\u200c]*گرمی)/i.test(String(s4EffectiveMsg || s6EffectiveMsg || userMsg));
           if (m4WhatIfOutOfScope) {
             const m4ScopeReply = '🔎 **خارج از دامنه شبیه‌ساز سناریو**\n\nشبیه‌سازی فرضی (What-If) فعلاً فقط برای دارایی‌های پایه (دلار آزاد، اونس جهانی، طلای ۱۸ عیار، سکه امامی، نقره جهانی) فعال است.\n\nبرای یورو، پوند انگلیس، درهم امارات، شاخص دلار (DXY)، نیم‌سکه، ربع‌سکه و سکه گرمی در حال حاضر فقط «قیمت لحظه‌ای و تغییر روزانه» ارائه می‌شود و سناریوی فرضی برایشان محاسبه نمی‌شود؛ تا فراهم‌شدن مبنای محاسباتی معتبر، هیچ عدد فرضی نمایش داده نمی‌شود.\n\nمی‌توانید قیمت لحظه‌ای همین دارایی را بپرسید (مثلاً «یورو چنده؟») یا سناریو را روی دارایی‌های پایه اجرا کنید.';
             return new Response(JSON.stringify({
@@ -669,7 +669,7 @@ export default {
               timestamp: new Date().toISOString()
             }), { headers: corsHeaders });
           }
-          let whatIfAst = parseWhatIfQuery(s4EffectiveMsg || userMsg, history); // Phase 2-3G-CX (P1-4/S4)
+          let whatIfAst = parseWhatIfQuery(s4EffectiveMsg || s6EffectiveMsg || userMsg, history); // Phase 2-3G-CX (P1-4/S4) + Phase 2-3H (M6/T2: S6)
           // Phase 2-3G-CX (P0-1): ابهام «مقدار» جدا نگه داشته می‌شود تا مسیر بازسازی سناریوی حافظه (2-3C/2-3E-B) بدون هیچ تغییری اجرا شود
           let whatIfMagnitudeClarify = null;
           if (whatIfAst && whatIfAst.status === 'AMBIGUOUS' && Array.isArray(whatIfAst.missing) && whatIfAst.missing.includes('magnitude')) {
