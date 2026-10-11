@@ -276,8 +276,11 @@ export default {
 
         const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '127.0.0.1';
 
-        // کنترل ریت‌لیمیت درخواست‌های چت (حداکثر ۱۰ پیام در دقیقه)
-        if (!checkChatRateLimit(clientIp, 10)) {
+        // Phase 2-3H (M8/الف): سقف نرخ چت پارامتریک — پیش‌فرض چندکاربره ۱۵/دقیقه (سناریوی NAT اشتراکی)؛
+        // بازتنظیم عملیاتی بدون deploy با env.CHAT_RATE_LIMIT_PER_MIN (clamp ۵..۶۰؛ نامعتبر/غایب ← ۱۵ — هرگز صفر).
+        // قرارداد پیام و status ۴۲۹ بدون هیچ تغییری.
+        const chatRateLimitPerMin = Math.max(5, Math.min(60, Number(env && env.CHAT_RATE_LIMIT_PER_MIN) || 15));
+        if (!checkChatRateLimit(clientIp, chatRateLimitPerMin)) {
           return new Response(JSON.stringify({
             success: false,
             error: 'تعداد پیام‌های ارسالی شما بیش از حد مجاز است. لطفاً یک دقیقه دیگر مجدداً تلاش فرمایید.'
