@@ -594,7 +594,7 @@ export default {
             const knowledgeMatched = !!(retrievedKnowledge && retrievedKnowledge.meta && retrievedKnowledge.meta.matched);
             return new Response(JSON.stringify({
               success: true,
-              reply: sanitizeUserFacingResponse(knowledgeReply, { technical: isTechnicalRequest }),
+              reply: sanitizeUserFacingResponse(knowledgeReply, { technical: isTechnicalRequest, context: 'KNOWLEDGE' }), // Phase 2-3H (M7)
               source: knowledgeMatched ? 'KNOWLEDGE_PRESENTATION' : 'KNOWLEDGE_ENTRY_MISSING',
               responseLevel: RESPONSE_LEVELS.STANDARD,
               interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
@@ -1752,7 +1752,7 @@ const ResponsePresentation = (() => {
    * پاک‌سازی پاسخ کاربرنما از نشت فرمول، ثابت‌های کانونیکال و نام اجزای داخلی.
    * در صورت درخواست صریح فنی کاربر، متن دست‌نخورده بازگردانده می‌شود.
    * @param {string} rawText متن پاسخ
-   * @param {{technical?: boolean}} options
+   * @param {{technical?: boolean, context?: 'KNOWLEDGE'}} options — M7: بافت دانش ثابت‌های کانونیکال را حفظ می‌کند
    */
   const sanitizeUserFacingResponse = (rawText, options = {}) => {
     if (rawText === null || rawText === undefined) return '';
@@ -1766,7 +1766,11 @@ const ResponsePresentation = (() => {
     text = text.replace(LATEX_LEFTOVER_RE, ' ');
 
     // ۲. حذف ثابت‌های کانونیکال محاسبات
-    MAGIC_CONSTANT_PATTERNS.forEach((re) => { text = text.replace(re, ' '); });
+    // Phase 2-3H (M7): استثنای بافت دانش‌نامه — فقط در ارائه مدخل دانش (context === 'KNOWLEDGE')
+    // حذف ثابت‌ها غیرفعال می‌شود؛ سایر گام‌ها (نام موتورها، LaTeX، واژگان فنی) در همه بافت‌ها برقرار است.
+    if (options.context !== 'KNOWLEDGE') {
+      MAGIC_CONSTANT_PATTERNS.forEach((re) => { text = text.replace(re, ' '); });
+    }
 
     // ۳. حذف نام موتورها و اجزای داخلی
     ENGINE_NAME_PATTERNS.forEach((re) => { text = text.replace(re, ' '); });
