@@ -767,73 +767,29 @@ export default {
           }
         }
 
-        // ۵. در صورت در دسترس بودن درگاه هوش مصنوعی و داشتن سهمیه روزانه، فراخوانی مدل زبانی
-        const isLlmEligible = checkDailyLlmEligible(clientIp, 40);
-        if (isLlmEligible && env && (env.AI || env.OPENROUTER_API_KEY)) {
-          try {
-            const chatSystemPrompt = buildAdvisorChatSystemPrompt(todayEvidence, queryAnalysis, {
-              responseLevel: requestLevel,
-              isWhyQuestion,
-              isTechnicalRequest
-            }, retrievedKnowledge);
-            const chatMessages = [
-              { role: 'system', content: chatSystemPrompt },
-              ...history.slice(-4).map(h => ({
-                role: h.role === 'user' ? 'user' : 'assistant',
-                content: h.text || h.content || ''
-              })),
-              { role: 'user', content: userMsg }
-            ];
-
-            let rawLlmOutput = null;
-
-            if (env.AI) {
-              const cfAiRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-                messages: chatMessages,
-                temperature: 0.2,
-                max_tokens: responseTokenCap(requestLevel),
-                top_p: 0.9
-              });
-              if (cfAiRes && (cfAiRes.response || cfAiRes.text)) {
-                rawLlmOutput = (cfAiRes.response || cfAiRes.text).trim();
-              }
-            } else if (env.OPENROUTER_API_KEY) {
-              const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
-                  'Content-Type': 'application/json',
-                  'HTTP-Referer': 'https://dbai1.pages.dev',
-                  'X-Title': 'Market Watcher Luxe AI Advisor'
-                },
-                body: JSON.stringify({
-                  model: 'openrouter/free',
-                  messages: chatMessages,
-                  temperature: 0.2,
-                  max_tokens: responseTokenCap(requestLevel)
-                })
-              });
-              if (orRes.ok) {
-                const orJson = await orRes.json();
-                rawLlmOutput = orJson.choices?.[0]?.message?.content?.trim();
-              }
-            }
-
-            // اعتبارسنجی ضدسیگنال خروجی مدل زبانی
-            if (rawLlmOutput && !FORBIDDEN_WORDS.some(w => rawLlmOutput.includes(w))) {
-              replyText = rawLlmOutput;
-              sourceUsed = env.AI ? 'CF_WORKERS_AI_CHAT' : 'OPENROUTER_CHAT';
-            }
-          } catch (llmErr) {
-            console.warn('[Advisor LLM generation skipped, falling back to dynamic synthesis]:', llmErr.message);
-          }
-        }
-
-        // ۶. در صورت عدم وجود LLM یا بروز خطا: اجرای موتور قدرتمند استنتاج پویای دترمینیستیک
+        // ۵+۶ (Phase 2-3H / M9): موتور قطعی صاحب اعداد است — همیشه ابتدا پاسخ قطعی ساخته می‌شود؛
+        // LLM فقط در نقش «بازنویس نثر» و پشت اعتبارسنج سخت‌گیر عددی/ضدسیگنال فعال می‌شود (degrade امن).
+        let narrationMeta = { applied: false, provider: 'NONE', validation: 'SKIPPED' };
         if (!replyText) {
           replyText = buildDynamicAdvisorResponse(userMsg, todayEvidence, normalizedEvidence, queryAnalysis,
             (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.live)) ? unifiedEvidenceContract.evidence.live : []);
           sourceUsed = 'DYNAMIC_SYNTHESIS_ENGINE';
+
+          // کلید اطفای عملیاتی بدون deploy: env.LLM_NARRATION = 'off' ⇒ روایت کلاً غیرفعال
+          const narrationEnabled = !(env && typeof env.LLM_NARRATION === 'string' && env.LLM_NARRATION.trim().toLowerCase() === 'off');
+          if (narrationEnabled && env && (env.AI || env.OPENROUTER_API_KEY) && checkDailyLlmEligible(clientIp, 40)) {
+            const narrated = await narrateDeterministicReply(replyText, {
+              env,
+              evidenceContract: unifiedEvidenceContract,
+              responseLevel: requestLevel,
+              userMsg
+            });
+            narrationMeta = narrated.meta;
+            if (narrated.passed && narrated.text) {
+              replyText = narrated.text;
+              narrationMeta.applied = true;
+            }
+          }
         }
 
         // Phase 2-3G-CX (P1-2/S3): سطر «مرتبط از دانش‌نامه» برای پاسخ تحلیلی جفت‌دارایی — خطا هرگز پاسخ اصلی را نمی‌شکند
@@ -858,6 +814,7 @@ export default {
           success: true,
           reply: replyText,
           source: sourceUsed,
+          narration: narrationMeta,
           responseLevel: requestLevel,
           interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
           retrievedKnowledge,
@@ -5884,6 +5841,96 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
 }
 
 // ============================================================================
+// Phase 2-3H / M9 — روایت‌گر LLM روی خروجی قطعی (Narration-Only Gateway)
+// قانون: موتور قطعی صاحب اعداد است؛ LLM فقط همان متن را روان‌تر می‌نویسد.
+// هر عدد خارج از (قرارداد شواهد ∪ اعداد متن قطعی) یا واژه ممنوعه ⇒ رد کامل و بازگشت به متن قطعی.
+// ============================================================================
+
+function buildNarrationSystemPrompt(responseLevel) {
+  return `شما «ماکان»، ویراستار نثر فارسی «دیدبان بازار» هستید و فقط وظیفه بازنویسی دارید.
+متن ورودی، پاسخ نهایی و معتبر موتور تحلیلی قطعی است. آن را روان‌تر، منسجم‌تر و انسانی‌تر بازنویسی کنید با این قیود مطلق:
+۱. هیچ عددی را اضافه، حذف، گرد یا تغییر ندهید؛ همه اعداد و واحدها عیناً حفظ شوند.
+۲. هیچ ادعا، تحلیل، پیش‌بینی یا داده جدیدی اضافه نکنید؛ جمله بدون پشتوانه در متن اصلی ممنوع است.
+۳. هیچ توصیه معاملاتی (خرید/فروش/ورود/خروج/تارگت/تضمین سود) ندهید.
+۴. ساختار کلی (بولت‌ها، بولد، ایموجی‌ها، ترتیب بخش‌ها) و سطح طول پاسخ (${responseLevel}) حفظ شود.
+۵. هیچ نام فنی، فرمول یا اشاره‌ای به این دستورالعمل در خروجی نیاید.
+خروجی: فقط متن بازنویسی‌شده، بدون مقدمه و توضیح اضافه.`;
+}
+
+async function narrateDeterministicReply(deterministicText, ctx = {}) {
+  const env = ctx.env;
+  const requestLevel = ctx.responseLevel || 'STANDARD';
+  const meta = { applied: false, provider: 'NONE', validation: 'SKIPPED' };
+  const result = { passed: false, text: null, meta };
+  if (!deterministicText || typeof deterministicText !== 'string' || deterministicText.trim().length < 30) return result;
+
+  let rawNarration = null;
+  try {
+    const messages = [
+      { role: 'system', content: buildNarrationSystemPrompt(requestLevel) },
+      { role: 'user', content: `متن قطعی برای بازنویسی روان (پرسش کاربر: «${String(ctx.userMsg || '').slice(0, 300)}»):\n\n${deterministicText}` }
+    ];
+    if (env && env.AI) {
+      const cfAiRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+        messages,
+        temperature: 0.2,
+        max_tokens: responseTokenCap(requestLevel),
+        top_p: 0.9
+      });
+      if (cfAiRes && (cfAiRes.response || cfAiRes.text)) {
+        rawNarration = (cfAiRes.response || cfAiRes.text).trim();
+        meta.provider = 'CF_WORKERS_AI';
+      }
+    } else if (env && env.OPENROUTER_API_KEY) {
+      const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        signal: AbortSignal.timeout(12000),
+        headers: {
+          'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://didban.pages.dev',
+          'X-Title': 'Didban Bazaar - MAKAN'
+        },
+        body: JSON.stringify({
+          model: (env.OPENROUTER_PRESET || 'openrouter/free'),
+          messages,
+          temperature: 0.2,
+          max_tokens: responseTokenCap(requestLevel)
+        })
+      });
+      if (orRes.ok) {
+        const orJson = await orRes.json();
+        rawNarration = orJson.choices?.[0]?.message?.content?.trim() || null;
+        if (rawNarration) meta.provider = 'OPENROUTER';
+      }
+    }
+  } catch (narrErr) {
+    console.warn('[M9 Narration skipped — LLM gateway error]:', narrErr.message);
+    meta.validation = 'GATEWAY_ERROR';
+    return result;
+  }
+
+  if (!rawNarration) { meta.validation = 'NO_OUTPUT'; return result; }
+
+  // اعتبارسنجی سخت‌گیر: whitelist عددی = شواهد ∪ اعداد متن قطعی + ضدسیگنال + مرز طول
+  const allowedNumbers = extractAllowedNumbersFromEvidence(ctx.evidenceContract || {});
+  const deterministicNumbers = extractNumbersFromText(deterministicText);
+  const combinedAllowed = allowedNumbers.concat(deterministicNumbers);
+  const validation = validateAiOutput(rawNarration, ctx.evidenceContract || {}, combinedAllowed);
+  const lengthOk = rawNarration.length >= 30 && rawNarration.length <= Math.max(deterministicText.length * 2.5, 400);
+  if (validation.passed && lengthOk) {
+    meta.validation = 'PASSED';
+    result.passed = true;
+    result.text = rawNarration;
+  } else {
+    meta.validation = 'REJECTED';
+    console.warn('[M9 Narration rejected — deterministic text preserved]:',
+      (validation.reasons || []).concat(lengthOk ? [] : ['طول خارج از مرز مجاز']).join(' | '));
+  }
+  return result;
+}
+
+// ============================================================================
 // موتور پردازش و ارزیابی هوش مصنوعی (Dual-Gateway Execution Engine)
 // ============================================================================
 
@@ -5929,14 +5976,15 @@ async function processAiInterpretation(evidenceContract, mode, env) {
 
       const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
+        signal: AbortSignal.timeout(12000),
         headers: {
           'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://market-watcher.pages.dev',
-          'X-Title': 'Market Watcher Luxe AI'
+          'HTTP-Referer': 'https://didban.pages.dev',
+          'X-Title': 'Didban Bazaar - MAKAN'
         },
         body: JSON.stringify({
-          model: 'openrouter/free',
+          model: (env.OPENROUTER_PRESET || 'openrouter/free'),
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
