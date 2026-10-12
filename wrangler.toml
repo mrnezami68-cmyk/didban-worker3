@@ -21,3 +21,9 @@ database_id = "5d57217e-6f65-43a1-a121-35e36f5f9b25"
 
 [observability]
 enabled = true
+
+# Phase 2-3H / M10 (P2): پایشگر synthetic — هر ۶ ساعت (درس M9: شکست بی‌صدا ممنوع)
+# هشدار push نیازمند تنظیم secret با نام ADMIN_SECRET در پنل همین ورکر است (هم‌مقدار با ورکر۲)؛ بدون آن فقط console.log (fail-safe).
+[triggers]
+crons = ["0 */6 * * *"]
+

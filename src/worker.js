@@ -79,6 +79,11 @@ const FORBIDDEN_WORDS = [
 ];
 
 export default {
+  // Phase 2-3H / M10 (P2): پایشگر synthetic — اجرای دوره‌ای با cron؛ شکست هیچ جزئی بی‌صدا نمی‌ماند.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runSyntheticMonitor(env));
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
@@ -5831,12 +5836,53 @@ function buildDynamicAdvisorResponse(userQuery, todayEvidence = {}, normalizedEv
     return buildScopeFallbackResponse(userQuery);
   }
 
+  // Phase 2-3H / M10 (P1): قانون «نامعتبر هرگز ۰ نمی‌شود» — هر سطر فقط با داده معتبر چاپ می‌شود؛
+  // اقلام فاقد داده صادقانه حذف و اعلام می‌شوند؛ هیچ صفر یا عدد جایگزینی ساخته نمی‌شود.
+  const summaryLines = [];
+  const missingItems = [];
+  if (usd.hasData && usdt.hasData && usdtSpreadPct !== null) {
+    summaryLines.push(`• **بازار ارز:** دلار آزاد **${fmtFa(usd.price)} تومان** | تتر **${fmtFa(usdt.price)} تومان** (اسپرد: **${fmtFa(usdtSpreadPct, 2)}٪**)`);
+  } else if (usd.hasData) {
+    summaryLines.push(`• **بازار ارز:** دلار آزاد **${fmtFa(usd.price)} تومان**`);
+    missingItems.push('تتر');
+  } else if (usdt.hasData) {
+    summaryLines.push(`• **بازار ارز:** تتر **${fmtFa(usdt.price)} تومان**`);
+    missingItems.push('دلار آزاد');
+  } else {
+    missingItems.push('بازار ارز');
+  }
+  if (gold18.hasData && sekee.hasData && coinBubblePct !== null) {
+    summaryLines.push(`• **بازار طلا:** طلای ۱۸ عیار **${fmtFa(gold18.price)} تومان** | سکه تمام **${fmtFa(sekee.price)} تومان** (حباب: **${fmtFa(coinBubblePct, 1)}٪**)`);
+  } else if (gold18.hasData) {
+    summaryLines.push(`• **بازار طلا:** طلای ۱۸ عیار **${fmtFa(gold18.price)} تومان**`);
+    missingItems.push('سکه تمام');
+  } else if (sekee.hasData) {
+    summaryLines.push(`• **بازار طلا:** سکه تمام **${fmtFa(sekee.price)} تومان**`);
+    missingItems.push('طلای ۱۸ عیار');
+  } else {
+    missingItems.push('بازار طلا');
+  }
+  if (mithqalPrice !== null && mithqalPrice > 0) {
+    summaryLines.push(`• **طلای آب‌شده:** مظنه مثقال ۱۷ عیار **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا)`);
+  }
+  if (tse.hasData) {
+    summaryLines.push(`• **شاخص کل بورس:** **${fmtFa(tse.price)} واحد** (${tse.change >= 0 ? '+' : ''}${fmtFa(tse.change, 2)}٪)`);
+  } else {
+    missingItems.push('شاخص کل بورس');
+  }
+
+  if (summaryLines.length === 0) {
+    return `💡 **${identityRoleLine()}:**\n\n` +
+      `درخواست شما درباره «${userQuery}» ارزیابی شد، اما در حال حاضر هیچ داده معتبری از تابلوی بازار در دسترس نیست؛ طبق اصول موتور، هیچ عدد جایگزین یا فرضی نمایش داده نمی‌شود. لطفاً پس از به‌روزرسانی داده‌های تابلو دوباره تلاش فرمایید.`;
+  }
+
+  const missingNote = missingItems.length > 0
+    ? `\n🔎 **توضیح شفاف:** ${missingItems.join('، ')} به دلیل نبود داده معتبر از این جمع‌بندی حذف شد — هیچ عدد جایگزینی نمایش داده نمی‌شود.\n`
+    : '';
+
   return `💡 **${identityRoleLine()}:**\n\n` +
     `درخواست شما درباره «${userQuery}» ارزیابی شد. خلاصه موازنه چندبعدی تابلوی فعال:\n\n` +
-    `• **بازار ارز:** دلار آزاد **${fmtFa(usd.price)} تومان** | تتر **${fmtFa(usdt.price)} تومان** (اسپرد: **${fmtFa(usdtSpreadPct, 2)}٪**)\n` +
-    `• **بازار طلا:** طلای ۱۸ عیار **${fmtFa(gold18.price)} تومان** | سکه تمام **${fmtFa(sekee.price)} تومان** (حباب: **${fmtFa(coinBubblePct, 1)}٪**)\n` +
-    `• **طلای آب‌شده:** مظنه مثقال ۱۷ عیار **${fmtFa(mithqalPrice)} تومان** (بر پایه ضریب تبدیل استاندارد طلا)\n` +
-    `• **شاخص کل بورس:** **${fmtFa(tse.price)} واحد** (${tse.change >= 0 ? '+' : ''}${fmtFa(tse.change, 2)}٪)\n\n` +
+    summaryLines.join('\n') + '\n' + missingNote + '\n' +
     `جهت بررسی تخصصی‌تر، می‌توانید یکی از گزینه‌های **سناریوهای ۴گانه بازار**، **واگرایی طلا و دلار**، **حباب سکه و طلای آب‌شده** یا **ساختار بورس** را مطرح فرمایید.`;
 }
 
@@ -6507,4 +6553,97 @@ function saveToEdgeCache(key, payload, ttlSeconds = 300) {
     timestamp: new Date().toISOString(),
     expiresAt: Date.now() + (ttlSeconds * 1000)
   });
+}
+
+
+// ============================================================================
+// Phase 2-3H / M10 (P2) — پایشگر synthetic (درس M9: شکست بی‌صدا ممنوع)
+// بررسی دوره‌ای: health ورکرهای ۱/۲/۴ + دو D1 + درگاه CF AI (همان مسیری که ۴ ماه مرده بود).
+// در شکست: هشدار push از طریق W2 (فقط اگر env.ADMIN_SECRET تنظیم باشد — fail-safe؛ خطای خود پایشگر هرگز پرتاب نمی‌شود).
+// ============================================================================
+
+const MONITOR_TARGETS = [
+  { name: 'Worker1 (collector)', url: 'https://market-data-collector.mrn135110.workers.dev/api/health' },
+  { name: 'Worker2 (reporter/push)', url: 'https://market-reporting-push.mrn135110.workers.dev/api/health' },
+  { name: 'Worker4 (auth gateway)', url: 'https://market-auth-gateway.mrn135110.workers.dev/api/health' }
+];
+
+async function runSyntheticMonitor(env) {
+  const failures = [];
+  const warnings = [];
+
+  // ۱. سلامت HTTP ورکرهای همسایه
+  for (const target of MONITOR_TARGETS) {
+    try {
+      const res = await fetch(target.url, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) {
+        failures.push(`${target.name}: HTTP ${res.status}`);
+        continue;
+      }
+      const body = await res.json().catch(() => null);
+      if (body && typeof body.status === 'string' && body.status !== 'healthy') {
+        failures.push(`${target.name}: status=${body.status}`);
+      }
+      if (body && body.marketData === 'stale') {
+        warnings.push(`${target.name}: marketData=stale (کهنگی داده — بررسی مالک)`);
+      }
+    } catch (err) {
+      failures.push(`${target.name}: ${String(err && err.message).slice(0, 80)}`);
+    }
+  }
+
+  // ۲. دو پایگاه D1 خودِ ورکر۳
+  try {
+    if (env && env.DB) await env.DB.prepare('SELECT 1').first();
+    else failures.push('Worker3 D1 market_db: binding غایب');
+  } catch (err) {
+    failures.push(`Worker3 D1 market_db: ${String(err && err.message).slice(0, 80)}`);
+  }
+  try {
+    if (env && env.KNOWLEDGE_DB) await env.KNOWLEDGE_DB.prepare('SELECT 1').first();
+    else failures.push('Worker3 D1 knowledge_db: binding غایب');
+  } catch (err) {
+    failures.push(`Worker3 D1 knowledge_db: ${String(err && err.message).slice(0, 80)}`);
+  }
+
+  // ۳. درگاه CF Workers AI — دقیقاً همان مسیری که در M9 کشف شد ۴ ماه مرده بود (مدل بازنشسته = خطای 5028)
+  try {
+    if (env && env.AI) {
+      const probe = await env.AI.run((env.CF_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'), {
+        messages: [{ role: 'user', content: 'ok' }],
+        max_tokens: 5
+      });
+      if (!probe || !(probe.response || probe.text)) warnings.push('CF AI: پاسخ خالی (روایت degrade می‌شود)');
+    } else {
+      warnings.push('CF AI: binding غایب (روایت فقط با OpenRouter)');
+    }
+  } catch (err) {
+    failures.push(`CF AI gateway: ${String(err && err.message).slice(0, 120)}`);
+  }
+
+  const summary = `پایش دیدبان — خرابی: ${failures.length} | هشدار: ${warnings.length}`;
+  console.log('[M10 Synthetic Monitor]', summary, JSON.stringify({ failures, warnings }));
+
+  // ۴. هشدار push فقط در خرابی سخت و فقط با secret (fail-safe کامل)
+  if (failures.length > 0 && env && env.ADMIN_SECRET) {
+    try {
+      await fetch('https://market-reporting-push.mrn135110.workers.dev/api/push/send', {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.ADMIN_SECRET}`
+        },
+        body: JSON.stringify({
+          title: '🚨 هشدار پایش دیدبان بازار',
+          body: `${failures.length} خرابی: ${failures.join(' | ').slice(0, 300)}`,
+          tag: 'didban-monitor'
+        })
+      });
+    } catch (alertErr) {
+      console.warn('[M10 Monitor alert failed — never throws]:', alertErr.message);
+    }
+  }
+
+  return { failures, warnings };
 }
