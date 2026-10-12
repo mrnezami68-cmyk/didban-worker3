@@ -5884,6 +5884,7 @@ async function narrateDeterministicReply(deterministicText, ctx = {}) {
         }
       } catch (cfNarrErr) {
         // زنجیره fallback مصوب گیت (H3): شکست درگاه اول هرگز روایت را نمی‌کشد — تلاش بعدی با OpenRouter
+        meta.detail = 'CF_ERR: ' + String(cfNarrErr && cfNarrErr.message).slice(0, 120);
         console.warn('[M9 Narration CF gateway failed — falling back to OpenRouter]:', cfNarrErr.message);
       }
     }
@@ -5908,6 +5909,9 @@ async function narrateDeterministicReply(deterministicText, ctx = {}) {
         const orJson = await orRes.json();
         rawNarration = orJson.choices?.[0]?.message?.content?.trim() || null;
         if (rawNarration) meta.provider = 'OPENROUTER';
+        else meta.detail = ((meta.detail ? meta.detail + ' | ' : '') + 'OR_EMPTY_CHOICE');
+      } else {
+        meta.detail = ((meta.detail ? meta.detail + ' | ' : '') + 'OR_HTTP_' + orRes.status);
       }
     }
   } catch (narrErr) {
