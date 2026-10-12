@@ -5871,17 +5871,23 @@ async function narrateDeterministicReply(deterministicText, ctx = {}) {
       { role: 'user', content: `متن قطعی برای بازنویسی روان (پرسش کاربر: «${String(ctx.userMsg || '').slice(0, 300)}»):\n\n${deterministicText}` }
     ];
     if (env && env.AI) {
-      const cfAiRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-        messages,
-        temperature: 0.2,
-        max_tokens: responseTokenCap(requestLevel),
-        top_p: 0.9
-      });
-      if (cfAiRes && (cfAiRes.response || cfAiRes.text)) {
-        rawNarration = (cfAiRes.response || cfAiRes.text).trim();
-        meta.provider = 'CF_WORKERS_AI';
+      try {
+        const cfAiRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+          messages,
+          temperature: 0.2,
+          max_tokens: responseTokenCap(requestLevel),
+          top_p: 0.9
+        });
+        if (cfAiRes && (cfAiRes.response || cfAiRes.text)) {
+          rawNarration = (cfAiRes.response || cfAiRes.text).trim();
+          meta.provider = 'CF_WORKERS_AI';
+        }
+      } catch (cfNarrErr) {
+        // زنجیره fallback مصوب گیت (H3): شکست درگاه اول هرگز روایت را نمی‌کشد — تلاش بعدی با OpenRouter
+        console.warn('[M9 Narration CF gateway failed — falling back to OpenRouter]:', cfNarrErr.message);
       }
-    } else if (env && env.OPENROUTER_API_KEY) {
+    }
+    if (!rawNarration && env && env.OPENROUTER_API_KEY) {
       const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         signal: AbortSignal.timeout(12000),
