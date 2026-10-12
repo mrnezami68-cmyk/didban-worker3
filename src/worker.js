@@ -5,7 +5,7 @@
  * مأموریت و وظایف:
  *  ۱. میکروسرویس بی‌وضعیت (Stateless AI Gateway) جهت تولید روایت ۳ لایه‌ای بازار بر مبنای قرارداد شواهد (Evidence Contract).
  *  ۲. مدار شکن دوگانه (Dual-Gateway Circuit Breaker):
- *     - درگاه اصلی: Cloudflare Workers AI (@cf/meta/llama-3.1-8b-instruct)
+ *     - درگاه اصلی: Cloudflare Workers AI (env.CF_AI_MODEL؛ پیش‌فرض @cf/meta/llama-3.3-70b-instruct-fp8-fast — مدل قبلی 2026-05-30 بازنشسته شد)
  *     - درگاه پشتیبان: OpenRouter API (Mistral/Qwen/Llama3.3)
  *     - درگاه ایمن قطعی: Deterministic Narrative Fallback Engine
  *  ۳. سد اعتبارسنجی خروجی (Strict Output Validator):
@@ -5872,7 +5872,7 @@ async function narrateDeterministicReply(deterministicText, ctx = {}) {
     ];
     if (env && env.AI) {
       try {
-        const cfAiRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+        const cfAiRes = await env.AI.run((env.CF_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'), {
           messages,
           temperature: 0.2,
           max_tokens: responseTokenCap(requestLevel),
@@ -5959,7 +5959,7 @@ async function processAiInterpretation(evidenceContract, mode, env) {
       const systemPrompt = buildSystemPrompt(mode);
       const userPrompt = buildUserPrompt(evidenceContract, mode);
 
-      const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+      const aiResponse = await env.AI.run((env.CF_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'), {
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
