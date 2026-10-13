@@ -27,3 +27,16 @@ enabled = true
 [triggers]
 crons = ["0 */6 * * *"]
 
+# Phase 2-3H / M10.2: Service Bindings — پروب سلامت و کانال هشدار بدون عبور از اینترنت
+# (کشف M10.1: فراخوانی workers.dev→workers.dev درون پلتفرم 404 می‌گیرد)
+[[services]]
+binding = "SVC_W1"
+service = "market-data-collector"
+
+[[services]]
+binding = "SVC_W2"
+service = "market-reporting-push"
+
+[[services]]
+binding = "SVC_W4"
+service = "market-auth-gateway"

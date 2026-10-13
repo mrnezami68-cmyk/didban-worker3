@@ -6574,9 +6574,9 @@ function saveToEdgeCache(key, payload, ttlSeconds = 300) {
 // ============================================================================
 
 const MONITOR_TARGETS = [
-  { name: 'Worker1 (collector)', url: 'https://market-data-collector.mrn135110.workers.dev/api/health' },
-  { name: 'Worker2 (reporter/push)', url: 'https://market-reporting-push.mrn135110.workers.dev/api/health' },
-  { name: 'Worker4 (auth gateway)', url: 'https://market-auth-gateway.mrn135110.workers.dev/api/health' }
+  { name: 'Worker1 (collector)', binding: 'SVC_W1', url: 'https://market-data-collector.mrn135110.workers.dev/api/health' },
+  { name: 'Worker2 (reporter/push)', binding: 'SVC_W2', url: 'https://market-reporting-push.mrn135110.workers.dev/api/health' },
+  { name: 'Worker4 (auth gateway)', binding: 'SVC_W4', url: 'https://market-auth-gateway.mrn135110.workers.dev/api/health' }
 ];
 
 async function runSyntheticMonitor(env, options = {}) {
@@ -6588,11 +6588,16 @@ async function runSyntheticMonitor(env, options = {}) {
   // ۱. سلامت HTTP ورکرهای همسایه
   for (const target of MONITOR_TARGETS) {
     try {
-      const res = await fetch(target.url, { signal: AbortSignal.timeout(10000) });
-      if (res.status === 403) {
+      // M10.2: مسیر اصلی = Service Binding (درون‌پلتفرمی)؛ fallback = fetch عمومی
+      const svc = target.binding && env && env[target.binding];
+      const viaBinding = !!(svc && typeof svc.fetch === 'function');
+      const res = viaBinding
+        ? await svc.fetch(target.url, { signal: AbortSignal.timeout(10000) })
+        : await fetch(target.url, { signal: AbortSignal.timeout(10000) });
+      if (!viaBinding && (res.status === 403 || res.status === 404)) {
         // M10.1 (یافته پنل: subrequest های 4xx): فراخوانی workers.dev→workers.dev درون کلادفلر
         // ممکن است توسط پلتفرم مسدود شود؛ این «خرابی سرویس» نیست — سلامت واقعی از سنجه‌های D1 سنجیده می‌شود.
-        warnings.push(`${target.name}: پروب داخلی مسدود (HTTP 403 — محدودیت پلتفرم، نه خرابی سرویس)`);
+        warnings.push(`${target.name}: پروب داخلی بدون binding مسدود/ناصحیح (HTTP ${res.status}) — محدودیت پلتفرم، نه خرابی سرویس`);
         checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'PLATFORM_BLOCKED' });
         continue;
       }
@@ -6608,7 +6613,7 @@ async function runSyntheticMonitor(env, options = {}) {
         failures.push(`${target.name}: status=${body.status}`);
         checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'FAIL', serviceStatus: body.status });
       } else {
-        checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'OK', serviceStatus: body && body.status });
+        checks.push({ name: target.name, kind: 'HTTP', via: viaBinding ? 'SERVICE_BINDING' : 'PUBLIC_FETCH', status: res.status, verdict: 'OK', serviceStatus: body && body.status });
       }
       if (body && body.marketData === 'stale') {
         warnings.push(`${target.name}: marketData=stale (کهنگی داده — بررسی مالک)`);
@@ -6632,8 +6637,9 @@ async function runSyntheticMonitor(env, options = {}) {
       const ts = row ? Number(row.ts) : 0;
       const ageMinutes = ts ? Math.round((Date.now() - ts) / 60000) : null;
       if (!ts) {
-        failures.push('Worker1 pipeline: هیچ رکوردی در market_prices نیست');
-        checks.push({ name: 'Worker1 data pipeline (D1)', kind: 'DATA_FRESHNESS', verdict: 'FAIL' });
+        // M10.2: کشف پیش‌نمایش زنده — D1 ورکر۳ با پایگاه بازار ورکر۱/۲ مشترک نیست؛ جدول خالی = سنجه غیرفعال (نه خرابی کاذب)
+        warnings.push('Worker1 pipeline: جدول بازار در D1 ورکر۳ خالی است (پایگاه مشترک نیست) — سنجه تازگی غیرفعال؛ سیگنال واقعی: health ورکر۱ از طریق binding');
+        checks.push({ name: 'Worker1 data pipeline (D1)', kind: 'DATA_FRESHNESS', verdict: 'NOT_SHARED' });
       } else if (Date.now() - ts > 2 * 60 * 60 * 1000) {
         failures.push(`Worker1 pipeline: آخرین ثبت ${ageMinutes} دقیقه پیش — توقف جمع‌آوری`);
         checks.push({ name: 'Worker1 data pipeline (D1)', kind: 'DATA_FRESHNESS', ageMinutes, verdict: 'FAIL' });
@@ -6680,7 +6686,8 @@ async function runSyntheticMonitor(env, options = {}) {
   // ۴. هشدار push فقط در خرابی سخت و فقط با secret (fail-safe کامل)
   if (!dryRun && failures.length > 0 && env && env.ADMIN_SECRET) {
     try {
-      await fetch('https://market-reporting-push.mrn135110.workers.dev/api/push/send', {
+      const alertFetch = (env && env.SVC_W2 && typeof env.SVC_W2.fetch === 'function') ? env.SVC_W2.fetch.bind(env.SVC_W2) : fetch;
+      await alertFetch('https://market-reporting-push.mrn135110.workers.dev/api/push/send', {
         method: 'POST',
         signal: AbortSignal.timeout(10000),
         headers: {
