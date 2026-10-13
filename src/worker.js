@@ -120,6 +120,17 @@ export default {
     }
 
     // ========================================================================
+    // Phase 2-3H / M10.1: پیش‌نمایش فقط‌خواندنی پایشگر (بدون هیچ ارسال هشداری) —
+    // راستی‌آزمایی مالک بدون نیاز به یافتن Logs؛ همان سنجه‌های cron را اجرا و گزارش می‌دهد.
+    if (url.pathname === '/api/monitor/preview') {
+      try {
+        const report = await runSyntheticMonitor(env, { dryRun: true });
+        return new Response(JSON.stringify({ success: true, ...report }), { headers: corsHeaders });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     // GET /api/health — وضعیت سلامت ورکر ۳، پایگاه‌های داده و درگاه‌های AI
     // ========================================================================
     if (url.pathname === '/api/health') {
@@ -6568,28 +6579,70 @@ const MONITOR_TARGETS = [
   { name: 'Worker4 (auth gateway)', url: 'https://market-auth-gateway.mrn135110.workers.dev/api/health' }
 ];
 
-async function runSyntheticMonitor(env) {
+async function runSyntheticMonitor(env, options = {}) {
+  const dryRun = options.dryRun === true; // M10.1: پیش‌نمایش بدون ارسال هشدار
   const failures = [];
   const warnings = [];
+  const checks = []; // M10.1: گزارش شفاف هر سنجه برای /api/monitor/preview
 
   // ۱. سلامت HTTP ورکرهای همسایه
   for (const target of MONITOR_TARGETS) {
     try {
       const res = await fetch(target.url, { signal: AbortSignal.timeout(10000) });
+      if (res.status === 403) {
+        // M10.1 (یافته پنل: subrequest های 4xx): فراخوانی workers.dev→workers.dev درون کلادفلر
+        // ممکن است توسط پلتفرم مسدود شود؛ این «خرابی سرویس» نیست — سلامت واقعی از سنجه‌های D1 سنجیده می‌شود.
+        warnings.push(`${target.name}: پروب داخلی مسدود (HTTP 403 — محدودیت پلتفرم، نه خرابی سرویس)`);
+        checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'PLATFORM_BLOCKED' });
+        continue;
+      }
       if (!res.ok) {
         failures.push(`${target.name}: HTTP ${res.status}`);
+        checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'FAIL' });
         continue;
       }
       const body = await res.json().catch(() => null);
-      if (body && typeof body.status === 'string' && body.status !== 'healthy') {
+      const svcStatus = body && typeof body.status === 'string' ? body.status.toLowerCase() : null;
+      // M10.1: ورکر۴ به‌درستی status=OK برمی‌گرداند — فقط healthy/ok پذیرفته است (رفع خرابی کاذب)
+      if (svcStatus && svcStatus !== 'healthy' && svcStatus !== 'ok') {
         failures.push(`${target.name}: status=${body.status}`);
+        checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'FAIL', serviceStatus: body.status });
+      } else {
+        checks.push({ name: target.name, kind: 'HTTP', status: res.status, verdict: 'OK', serviceStatus: body && body.status });
       }
       if (body && body.marketData === 'stale') {
         warnings.push(`${target.name}: marketData=stale (کهنگی داده — بررسی مالک)`);
       }
     } catch (err) {
-      failures.push(`${target.name}: ${String(err && err.message).slice(0, 80)}`);
+      const msg = String(err && err.message).slice(0, 80);
+      if (/1042|same zone|subrequest/i.test(msg)) {
+        warnings.push(`${target.name}: پروب داخلی مسدود (${msg}) — محدودیت پلتفرم، نه خرابی سرویس`);
+        checks.push({ name: target.name, kind: 'HTTP', verdict: 'PLATFORM_BLOCKED', error: msg });
+      } else {
+        failures.push(`${target.name}: ${msg}`);
+        checks.push({ name: target.name, kind: 'HTTP', verdict: 'FAIL', error: msg });
+      }
     }
+  }
+
+  // ۱.۵ (M10.1) سنجه مستقل خط تولید داده ورکر۱ از D1 مشترک — بی‌نیاز از HTTP و مصون از مسدودیت پلتفرم
+  try {
+    if (env && env.DB) {
+      const row = await env.DB.prepare('SELECT MAX(timestamp) AS ts FROM market_prices').first();
+      const ts = row ? Number(row.ts) : 0;
+      const ageMinutes = ts ? Math.round((Date.now() - ts) / 60000) : null;
+      if (!ts) {
+        failures.push('Worker1 pipeline: هیچ رکوردی در market_prices نیست');
+        checks.push({ name: 'Worker1 data pipeline (D1)', kind: 'DATA_FRESHNESS', verdict: 'FAIL' });
+      } else if (Date.now() - ts > 2 * 60 * 60 * 1000) {
+        failures.push(`Worker1 pipeline: آخرین ثبت ${ageMinutes} دقیقه پیش — توقف جمع‌آوری`);
+        checks.push({ name: 'Worker1 data pipeline (D1)', kind: 'DATA_FRESHNESS', ageMinutes, verdict: 'FAIL' });
+      } else {
+        checks.push({ name: 'Worker1 data pipeline (D1)', kind: 'DATA_FRESHNESS', ageMinutes, verdict: 'OK' });
+      }
+    }
+  } catch (err) {
+    failures.push(`Worker1 pipeline: ${String(err && err.message).slice(0, 80)}`);
   }
 
   // ۲. دو پایگاه D1 خودِ ورکر۳
@@ -6625,7 +6678,7 @@ async function runSyntheticMonitor(env) {
   console.log('[M10 Synthetic Monitor]', summary, JSON.stringify({ failures, warnings }));
 
   // ۴. هشدار push فقط در خرابی سخت و فقط با secret (fail-safe کامل)
-  if (failures.length > 0 && env && env.ADMIN_SECRET) {
+  if (!dryRun && failures.length > 0 && env && env.ADMIN_SECRET) {
     try {
       await fetch('https://market-reporting-push.mrn135110.workers.dev/api/push/send', {
         method: 'POST',
@@ -6645,5 +6698,5 @@ async function runSyntheticMonitor(env) {
     }
   }
 
-  return { failures, warnings };
+  return { summary, failures, warnings, checks, dryRun, checkedAt: new Date().toISOString() };
 }
