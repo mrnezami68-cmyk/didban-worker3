@@ -2,6 +2,13 @@
 
 ---
 
+## M15-B — Indicator boxes endpoint + rule-based interpretation layer (2026-10-17)
+- New `GET /api/indicators?window=7|14|30`: single canonical source for market-intelligence indicator boxes (same M1 daily series as chat/scenarios).
+- Reuses frozen M14 functions; new derivations computed on-the-fly from the same series (no storage, no schema change): `ma21_slope_pct_1d`, `rsi_delta_1d`, RSI saturation persistence, `ma21_cross_1d`, `ma21_side_streak`, `trend_regime` (sign-agreement only), distance trend.
+- Fixed-horizon rule: RSI-14 and 5/10-observation momentum are independent of the display window; only statistical zones follow 7/14/30.
+- Layer-2 deterministic interpretation: sentences exclusively from INDICATOR_INTERPRETATION_CANON.md v1.1 (owner-frozen); 1:1 conformance enforced by tests; strict anti-signal red lines.
+- Versioned contract: formula_version=m15.1, as_of_date != calculated_at, source_window, data_quality/missing_observations, USD🔗USDT pair spread (series never merged).
+
 ## [v4.0.2-phase2-3f-b3-kb] — تکمیل پوشش دانش‌نامه (Phase 2-3F-B3-KB)
 * **۹ موضوع جدید دانش‌نامه** (`INTEREST_RATES`·`INFLATION`·`VOLATILITY`·`DRAWDOWN`·`STABLECOIN`·`ETH_BTC`·`DIVERSIFICATION`·`GOLD_PURITY`·`CORRELATION`) با کلیدواژه‌های مرزدار + نگاشت موضوع→شناسه برای ۱۱ مدخل تکمیلی.
 * **انتقال `tokenKeywords` مشتق‌شده به `effectiveQuery`** در مسیر بازیاب ورکر ⇒ پرسش‌های زبان طبیعی («نرخ بهره چه اثری بر طلا دارد؟»، «نسبت ETH به BTC چیست؟»، «عیار طلا چیست؟») به مدخل درست می‌رسند.

@@ -131,6 +131,22 @@ export default {
       }
     }
 
+    // ========================================================================
+    // Phase 2-3H / M15-B: GET /api/indicators — منبع واحد اندیکاتورهای «هوش بازار»
+    // لایه ۱ (محاسبه قطعی از سری M1) + لایه ۲ (تفسیر قاعده‌مند Canon v1.1)؛ فقط داده روزانه —
+    // خروجی روز-پایدار: کش کلاینت با کلید formula_version + as_of_date + window.
+    // ========================================================================
+    if (url.pathname === '/api/indicators' && request.method === 'GET') {
+      try {
+        const payload = await buildIndicatorsPayloadM15(url.searchParams.get('window'), env);
+        return new Response(JSON.stringify({ success: true, ...payload }), {
+          headers: { ...corsHeaders, 'Cache-Control': 'public, max-age=300' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     // GET /api/health — وضعیت سلامت ورکر ۳، پایگاه‌های داده و درگاه‌های AI
     // ========================================================================
     if (url.pathname === '/api/health') {
@@ -4189,6 +4205,287 @@ async function buildScenarioIndicatorContext(entities, env) {
     return `\n\n📎 **زمینه آماری ${label}** (DERIVED از سری تاریخی تا ${s[s.length - 1].date}): ${parts.join(' • ')} — توصیف گذشته است؛ نه سیگنال، نه پیش\u200cبینی، و مستقل از مفروضات فرضی سناریو.`;
   } catch (e) { return ''; }
 }
+
+/* ==========================================================================
+   Phase 2-3H (M15-B) — موتور اندیکاتورهای «هوش بازار» + لایه ۲ تفسیر قاعده‌مند
+   منبع کانونیکال جمله‌ها و برچسب‌ها: INDICATOR_INTERPRETATION_CANON.md (Canon v1.1 — فریز مالک 2026-10-17)
+   اصول: بازاستفاده کامل از توابع فریزشده M14؛ همه مشتقات (شیب/دلتا/ماندگاری/رژیم) در لحظه از همان سری —
+   هیچ ذخیره جدید و هیچ تغییر schema؛ null هرگز ۰ نمی‌شود؛ داده ناکافی ⇒ null صادقانه + حداقل لازم.
+   === M15_FUNCTIONS_START === */
+const M15_FORMULA_VERSION = 'm15.1';
+const M15_SMA_PERIOD = 21;
+const M15_ASSETS = ['USD', 'USDT', 'GOLD18', 'COIN', 'BTC', 'ETH']; // ترتیب ثابت مصوب: دلار🔗تتر، طلا۱۸، سکه، BTC، ETH
+const M15_WINDOWS = [7, 14, 30];
+
+function computeSmaAtM15(points, endIdx, period = M15_SMA_PERIOD) {
+  // SMA دوره‌ای که آخرین عضو آن points[endIdx] است؛ داده ناکافی ⇒ null
+  if (!Array.isArray(points) || endIdx < period - 1 || endIdx >= points.length) return null;
+  let sum = 0;
+  for (let i = endIdx - period + 1; i <= endIdx; i++) {
+    const p = points[i] && points[i].price;
+    if (!Number.isFinite(p) || p <= 0) return null;
+    sum += p;
+  }
+  return sum / period;
+}
+
+function computeMa21M15(points) {
+  // خروجی: sma، فاصله٪، شیب یک‌مشاهده‌ای٪، روند فاصله، عبور یک‌مشاهده‌ای، ماندگاری سمت فعلی
+  if (!Array.isArray(points) || points.length < M15_SMA_PERIOD) {
+    return { insufficient: true, needed: M15_SMA_PERIOD, got: Array.isArray(points) ? points.length : 0 };
+  }
+  const n = points.length;
+  const smaToday = computeSmaAtM15(points, n - 1);
+  if (smaToday === null || smaToday <= 0) return { insufficient: true, needed: M15_SMA_PERIOD, got: n };
+  const last = points[n - 1];
+  const distancePct = ((last.price - smaToday) / smaToday) * 100;
+  const smaYesterday = computeSmaAtM15(points, n - 2); // همان پنجره، یک مشاهده عقب‌تر — بدون ذخیره
+  let slopePct1d = null, distanceTrend = null, cross1d = null;
+  if (smaYesterday !== null && smaYesterday > 0) {
+    slopePct1d = ((smaToday - smaYesterday) / smaYesterday) * 100;
+    const prev = points[n - 2];
+    const distYesterdayPct = ((prev.price - smaYesterday) / smaYesterday) * 100;
+    if (Math.abs(distancePct) > Math.abs(distYesterdayPct)) distanceTrend = 'WIDENING';
+    else if (Math.abs(distancePct) < Math.abs(distYesterdayPct)) distanceTrend = 'NARROWING';
+    else distanceTrend = 'UNCHANGED';
+    const sideToday = Math.sign(last.price - smaToday);
+    const sideYesterday = Math.sign(prev.price - smaYesterday);
+    cross1d = (sideToday !== 0 && sideYesterday !== 0 && sideToday !== sideYesterday)
+      ? (sideToday > 0 ? 'CROSSED_ABOVE' : 'CROSSED_BELOW') : 'NONE';
+  }
+  // ماندگاری سمت فعلی: شمار مشاهدات متوالی از انتها که قیمت در همان سمت SMA هم‌مشاهده بسته شده
+  const sideNow = Math.sign(last.price - smaToday);
+  let sideStreak = 0, sideStreakDepthLimited = false;
+  if (sideNow !== 0) {
+    for (let i = n - 1; i >= 0; i--) {
+      const smaI = computeSmaAtM15(points, i);
+      if (smaI === null) { sideStreakDepthLimited = true; break; } // عمق سری اجازه محاسبه بیشتر نمی‌دهد — صادقانه اعلام می‌شود
+      const s = Math.sign(points[i].price - smaI);
+      if (s === sideNow) sideStreak++;
+      else break;
+    }
+  }
+  const round2 = (v) => (v === null ? null : Number(v.toFixed(2)));
+  return {
+    sma21: Number(smaToday.toFixed(2)),
+    distancePct: round2(distancePct),
+    slopePct1d: slopePct1d === null ? null : Number(slopePct1d.toFixed(3)),
+    distanceTrend, cross1d,
+    side: sideNow > 0 ? 'ABOVE' : (sideNow < 0 ? 'BELOW' : 'ON'),
+    sideStreak, sideStreakDepthLimited,
+    usedPoints: n, firstDate: points[0].date, lastDate: last.date
+  };
+}
+
+function computeRsiPackM15(points) {
+  // RSI امروز (تابع فریزشده M14) + دلتای یک‌مشاهده‌ای (بازمحاسبه روی سری منهای آخرین مشاهده) + ماندگاری اشباع
+  const today = computeRsiM14(points);
+  if (!today) return { insufficient: true, needed: M14_RSI_PERIOD + 1, got: Array.isArray(points) ? points.length : 0 };
+  const yesterday = points.length >= M14_RSI_PERIOD + 2 ? computeRsiM14(points.slice(0, points.length - 1)) : null;
+  const delta1d = yesterday ? Number((today.rsi - yesterday.rsi).toFixed(1)) : null;
+  // ماندگاری: شمار نقاط انتهایی متوالی با RSI>70 یا RSI<30 (هر نقطه = RSI سری تا همان نقطه)
+  let persistence = 0, persistenceZone = null;
+  const zoneOf = (r) => (r > 70 ? 'OVERBOUGHT' : (r < 30 ? 'OVERSOLD' : null));
+  persistenceZone = zoneOf(today.rsi);
+  if (persistenceZone) {
+    persistence = 1;
+    for (let end = points.length - 1; end >= M14_RSI_PERIOD + 1; end--) {
+      const r = computeRsiM14(points.slice(0, end));
+      if (r && zoneOf(r.rsi) === persistenceZone) persistence++;
+      else break;
+    }
+  }
+  return {
+    rsi: today.rsi, period: today.period, delta1d,
+    persistenceDays: persistenceZone ? persistence : 0, persistenceZone,
+    usedPoints: today.usedPoints, firstDate: today.firstDate, lastDate: today.lastDate
+  };
+}
+
+function classifyTrendRegimeM15(slopePct1d, roc5, roc10) {
+  // Canon v1.1 §۲.۳ — رژیم فقط با هم‌علامتی (بدون آستانه من‌درآوردی)
+  if (slopePct1d === null || roc5 === null || roc10 === null) return 'UNKNOWN';
+  if (slopePct1d > 0 && roc5 > 0 && roc10 > 0) return 'ALIGNED_UP';
+  if (slopePct1d < 0 && roc5 < 0 && roc10 < 0) return 'ALIGNED_DOWN';
+  return 'MIXED_RANGE';
+}
+
+/* --- لایه ۲: تفسیر قاعده‌مند — جمله‌ها فقط از جدول‌های Canon v1.1 (تطابق ۱:۱ در تست) --- */
+const M15_RSI_BANDS = [
+  { max: 20, label: 'ضعف شدید مومنتوم صعودی در بازه اخیر', note: 'تداوم نزول نیز ممکن است؛ کف\u200cیابی نیست' },
+  { max: 30, label: 'غلبه حرکت\u200cهای نزولی — نزدیک محدوده متداول اشباع فروش', note: 'SATURATION' },
+  { max: 40, label: 'مومنتوم نسبتاً ضعیف', note: 'نیازمند بررسی روند و تغییرات اخیر' },
+  { max: 50, label: 'مومنتوم ضعیف تا میانه', note: 'عبور از ۵۰ به\u200cتنهایی تغییر روند را اثبات نمی\u200cکند' },
+  { max: 60, label: 'مومنتوم نسبتاً مثبت', note: 'با موقعیت نسبت به MA21 سنجیده شود' },
+  { max: 70, label: 'مومنتوم مثبت و نسبتاً قوی', note: 'ادامه یا تضعیف تدریجی هر دو ممکن است' },
+  { max: 80, label: 'مومنتوم صعودی قوی — محدوده متداول اشباع خرید', note: 'SATURATION' },
+  { max: 100.0001, label: 'مومنتوم بسیار قوی در بازه محاسباتی — اشباع خرید عمیق', note: 'SATURATION_DEEP' }
+];
+// Canon §۱.۱.الف — لحن استاندارد دوجزئی اشباع (هیچ جزء به‌تنهایی مجاز نیست)
+const M15_SATURATION_TONE = (kind) =>
+  `به لحاظ سیگنالِ اندیکاتور، در شرایط ${kind} قرار داریم؛ اما عدم قطعیت و دقت محدود اندیکاتورها، تحلیل را نیازمند سنجش چند عامل دیگر می\u200cکند (موقعیت نسبت به MA21، مومنتوم، نواحی آماری و رژیم روند).`;
+
+function interpretRsiM15(pack) {
+  if (!pack || pack.insufficient) return null;
+  const band = M15_RSI_BANDS.find((b) => pack.rsi <= b.max) || M15_RSI_BANDS[M15_RSI_BANDS.length - 1];
+  let note;
+  if (band.note === 'SATURATION') note = M15_SATURATION_TONE(pack.rsi >= 50 ? 'اشباع خرید' : 'اشباع فروش');
+  else if (band.note === 'SATURATION_DEEP') note = `${M15_SATURATION_TONE('اشباع خرید')} احتمال تداوم یا افزایش ناپایداری وجود دارد.`;
+  else note = band.note;
+  let deltaLine = null;
+  if (pack.delta1d !== null) {
+    deltaLine = Math.abs(pack.delta1d) < 0.05 ? 'نسبت به محاسبه روز قبل تقریباً بدون تغییر'
+      : (pack.delta1d > 0 ? 'نسبت به محاسبه روز قبل تقویت شده' : 'نسبت به محاسبه روز قبل تضعیف شده');
+  }
+  return { label: band.label, note, deltaLine };
+}
+
+function interpretMa21M15(ma) {
+  if (!ma || ma.insufficient || ma.slopePct1d === null) return null;
+  const above = ma.side === 'ABOVE', slopeUp = ma.slopePct1d > 0;
+  let sentence;
+  if (above && slopeUp) sentence = 'قیمت بالاتر از میانگین ۲۱روزه و خود میانگین نیز صعودی است';
+  else if (above && !slopeUp) sentence = 'قیمت فعلاً بالاتر از میانگین است، اما میانگین روند کاهشی دارد';
+  else if (!above && !slopeUp) sentence = 'قیمت پایین\u200cتر از میانگین و میانگین نیز نزولی است';
+  else sentence = 'قیمت پایین\u200cتر از میانگین است، اما میانگین در حال افزایش است';
+  const distLine = ma.distanceTrend === 'WIDENING' ? 'فاصله از میانگین در حال افزایش است'
+    : (ma.distanceTrend === 'NARROWING' ? 'فاصله از میانگین در حال کاهش است' : null);
+  return { sentence, distLine };
+}
+
+function interpretPrzM15(ma, regime) {
+  // Canon v1.1 §۲.۳ — جدول جمله‌های مجاز نقش ناحیه‌ای MA21
+  if (!ma || ma.insufficient || regime === 'UNKNOWN') return null;
+  if (regime === 'MIXED_RANGE') {
+    return 'در شرایط رنج\u200cنما، میانگین متحرک مکرراً شکسته می\u200cشود و اعتبار ناحیه\u200cای آن پایین است؛ کف و سقف آماری پنجره مرجع مناسب\u200cتری است';
+  }
+  const withTrend = (regime === 'ALIGNED_UP' && ma.side === 'ABOVE') || (regime === 'ALIGNED_DOWN' && ma.side === 'BELOW');
+  if (ma.cross1d === 'CROSSED_ABOVE' || ma.cross1d === 'CROSSED_BELOW') {
+    return 'قیمت از ناحیه میانگین عبور کرده؛ عبور یک\u200cروزه به\u200cتنهایی شکست ساختار نیست — ماندگاری بسته\u200cهای بعدی در آن سمت، ملاک اعتبار است';
+  }
+  if (!withTrend && ma.sideStreak >= 2) {
+    return 'ماندگاری چندمشاهده\u200cای در آن\u200cسوی میانگین، شواهد شکست ساختار و تغییر ماهیت روند را تقویت می\u200cکند؛ هنوز تأیید قطعی نیست';
+  }
+  if (withTrend && ma.distanceTrend === 'NARROWING') {
+    return 'در روند هم\u200cراستای فعلی، ناحیه میانگین ۲۱روزه طبق قاعده کلاسیک یک ناحیه واکنش محتمل است؛ واکنش قیمت به این ناحیه قابل\u200cرصد است — این پیش\u200cبینی قطعی نیست';
+  }
+  return null;
+}
+
+function interpretMomentumM15(mom) {
+  if (!mom || mom.roc5 === null || mom.roc10 === null) return null;
+  const p5 = mom.roc5 > 0, p10 = mom.roc10 > 0;
+  if (p5 && p10) return 'قیمت در هر دو افق بالاتر از نقطه آغاز بازه است';
+  if (!p5 && !p10) return 'قیمت در هر دو افق پایین\u200cتر از نقطه آغاز بازه است';
+  if (p5 && !p10) return 'حرکت کوتاه\u200cمدت مثبت شده، اما تغییر ده\u200cروزه همچنان منفی است';
+  return 'با وجود رشد در افق ده\u200cروزه، پنج مشاهده اخیر کاهشی بوده — تضعیف کوتاه\u200cمدت؛ به\u200cتنهایی تغییر روند را اثبات نمی\u200cکند';
+}
+
+function interpretCombinedM15(rsiPack, ma, mom) {
+  // Canon §۵ — پنج الگوی ترکیبی؛ خارج از این جدول هیچ جمع‌بندی مجاز نیست
+  if (!rsiPack || rsiPack.insufficient || !ma || ma.insufficient || ma.slopePct1d === null || !mom || mom.roc5 === null || mom.roc10 === null) return null;
+  const above = ma.side === 'ABOVE', slopeUp = ma.slopePct1d > 0;
+  if (above && slopeUp && mom.roc5 > 0 && mom.roc10 > 0 && rsiPack.rsi >= 60) {
+    return 'شواهد با غلبه حرکت صعودی در داده\u200cهای اخیر سازگارند؛ این سیگنال خرید یا تضمین ادامه نیست';
+  }
+  if (!above && !slopeUp && mom.roc5 < 0 && mom.roc10 < 0 && rsiPack.rsi <= 40) {
+    return 'شواهد با غلبه حرکت نزولی در داده\u200cهای اخیر سازگارند؛ این سیگنال فروش یا تضمین ادامه نیست';
+  }
+  if (above && slopeUp && mom.roc5 < 0 && mom.roc10 > 0) {
+    return 'عملکرد کوتاه\u200cمدت نسبت به افق ده\u200cروزه ضعیف\u200cتر شده؛ تمایز اصلاح موقت از تغییر روند نیازمند شواهد بیشتر است';
+  }
+  if (!above && !slopeUp && mom.roc5 > 0 && mom.roc10 < 0) {
+    return 'بهبود نسبی کوتاه\u200cمدت در دل ضعف ده\u200cروزه؛ هنوز تغییر روند تأییدشده نیست';
+  }
+  return 'شواهد هم\u200cجهت نیستند؛ از جمع\u200cبندی یک\u200cسویه خودداری می\u200cشود';
+}
+
+const M15_REGIME_LABELS_FA = {
+  ALIGNED_UP: 'روند صعودی هم\u200cراستا (قوی\u200cنما)',
+  ALIGNED_DOWN: 'روند نزولی هم\u200cراستا (قوی\u200cنما)',
+  MIXED_RANGE: 'مختلط/رنج\u200cنما',
+  UNKNOWN: null
+};
+
+async function buildIndicatorsPayloadM15(windowDays, env) {
+  const win = M15_WINDOWS.includes(Number(windowDays)) ? Number(windowDays) : 30;
+  // عمق واکشی: برای MA21 و ماندگاری سمت، بیشینه عمق موجود (سقف ۶۰) — نواحی/کیفیت داده روی پنجره نمایش بریده می‌شود
+  const keys = M15_ASSETS.map((a) => HISTORICAL_ASSET_KEY_MAP[a]);
+  const series = await fetchDailySeries(keys, 60, env);
+  const calculatedAt = new Date().toISOString();
+  const assets = [];
+  const lastPriceOf = {};
+  M15_ASSETS.forEach((asset) => {
+    const key = HISTORICAL_ASSET_KEY_MAP[asset];
+    const s = series[key] || [];
+    const entry = {
+      asset, label: METRICS_ASSET_LABELS_FA[asset] || asset,
+      unit: HISTORICAL_ASSET_UNITS[key] || '',
+      as_of_date: s.length ? s[s.length - 1].date : null,
+      points_total: s.length
+    };
+    if (s.length === 0) { entry.no_data = true; assets.push(entry); return; }
+    lastPriceOf[asset] = s[s.length - 1].price;
+    // کیفیت داده در پنجره نمایش: نقاط موجود در برابر روزهای تقویمی پنجره
+    const winPts = s.slice(-win);
+    const calSpan = winPts.length >= 2
+      ? Math.round((Date.parse(winPts[winPts.length - 1].date) - Date.parse(winPts[0].date)) / 86400000) + 1
+      : winPts.length;
+    entry.source_window = { requested_days: win, points_in_window: winPts.length, first_date: winPts.length ? winPts[0].date : null };
+    entry.data_quality = { missing_observations: Math.max(0, calSpan - winPts.length) };
+    // لایه ۱ — محاسبات (RSI/MA21/مومنتوم افق-ثابت روی کل سری؛ نواحی فقط روی پنجره نمایش)
+    const rsiPack = computeRsiPackM15(s);
+    const ma = computeMa21M15(s);
+    const mom = computeMomentumM14(s);
+    const zones = computeZonesM14(winPts);
+    entry.rsi_14 = rsiPack.insufficient ? null : rsiPack.rsi;
+    entry.rsi_needed = rsiPack.insufficient ? rsiPack.needed : undefined;
+    entry.rsi_delta_1d = rsiPack.insufficient ? null : rsiPack.delta1d;
+    entry.rsi_persistence_days = rsiPack.insufficient ? null : rsiPack.persistenceDays;
+    entry.rsi_persistence_zone = rsiPack.insufficient ? null : rsiPack.persistenceZone;
+    entry.sma_21 = ma.insufficient ? null : ma.sma21;
+    entry.ma21_needed = ma.insufficient ? ma.needed : undefined;
+    entry.ma21_distance_pct = ma.insufficient ? null : ma.distancePct;
+    entry.ma21_slope_pct_1d = ma.insufficient ? null : ma.slopePct1d;
+    entry.ma21_distance_trend = ma.insufficient ? null : ma.distanceTrend;
+    entry.ma21_cross_1d = ma.insufficient ? null : ma.cross1d;
+    entry.ma21_side = ma.insufficient ? null : ma.side;
+    entry.ma21_side_streak = ma.insufficient ? null : ma.sideStreak;
+    entry.momentum_5d_pct = mom ? mom.roc5 : null;
+    entry.momentum_10d_pct = mom ? mom.roc10 : null;
+    entry.consecutive_direction_days = mom ? mom.streak : null;
+    entry.consecutive_direction = mom ? (mom.streakDir > 0 ? 'UP' : (mom.streakDir < 0 ? 'DOWN' : 'FLAT')) : null;
+    entry.zone_low = zones ? { price: zones.low.price, date: zones.low.date, distance_pct: zones.distLowPct } : null;
+    entry.zone_high = zones ? { price: zones.high.price, date: zones.high.date, distance_pct: zones.distHighPct } : null;
+    entry.trend_regime = classifyTrendRegimeM15(entry.ma21_slope_pct_1d, entry.momentum_5d_pct, entry.momentum_10d_pct);
+    entry.trend_regime_fa = M15_REGIME_LABELS_FA[entry.trend_regime];
+    // لایه ۲ — تفسیر قاعده‌مند (فقط جمله‌های Canon)
+    entry.interpretation = {
+      rsi: interpretRsiM15(rsiPack),
+      ma21: interpretMa21M15(ma),
+      prz: interpretPrzM15(ma, entry.trend_regime),
+      momentum: interpretMomentumM15(mom),
+      combined: interpretCombinedM15(rsiPack, ma, mom)
+    };
+    assets.push(entry);
+  });
+  // زوج ساختاری دلار🔗تتر — اسپرد واقعی (داده‌ها هرگز ادغام نمی‌شوند)
+  let pairSpreadPct = null;
+  if (Number.isFinite(lastPriceOf.USD) && Number.isFinite(lastPriceOf.USDT) && lastPriceOf.USD > 0) {
+    pairSpreadPct = Number((((lastPriceOf.USDT - lastPriceOf.USD) / lastPriceOf.USD) * 100).toFixed(2));
+  }
+  return {
+    formula_version: M15_FORMULA_VERSION,
+    canon_version: 'v1.1',
+    calculated_at: calculatedAt,
+    window_days: win,
+    fixed_horizon_note: 'RSI-14 و مومنتوم ۵/۱۰ مشاهده\u200cای افق-ثابت\u200cاند؛ فقط نواحی آماری تابع پنجره نمایش است.',
+    anti_signal_line: M14_ANTI_SIGNAL_LINE,
+    pair: { base: 'USD', quote: 'USDT', spread_pct: pairSpreadPct },
+    assets
+  };
+}
+/* === M15_FUNCTIONS_END === */
 
 async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
   const maxResults = typeof options.maxResults === 'number' ? options.maxResults : 2;
