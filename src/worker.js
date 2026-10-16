@@ -543,6 +543,40 @@ export default {
           }
         }
 
+        // ۳.۵ج. Phase 2-3H (M14): اندیکاتورهای قطعی — مسیریابی مضیّق (RSI/اشباع، حمایت/مقاومت، مومنتوم).
+        // «قیمت X چنده» مطلقاً دست‌نخورده (واژه اندیکاتوری الزامی + موجودیت نگاشت‌پذیر الزامی؛ نبود هرکدام ⇒ مسیر عادی).
+        {
+          const _iq = String(userMsg || '');
+          const IND_ASK = /(چقدره|چقدر است|چنده|چند است|چقدر بود|چند بود|چقدر|میزان|عدد|کجاست|کجا است|کجان|چطوره|چطور است|وضعیت)/;
+          const IND_EXCLUDE = /(چیست|چیه|یعنی|به\s*چه\s*معنا|تعریف)/;
+          let _indKind = null;
+          if (/(RSI|آر\s*اس\s*آی|اشباع\s*خرید|اشباع\s*فروش)/i.test(_iq)) _indKind = 'RSI';
+          else if (/(حمایت|مقاومت)/.test(_iq)) _indKind = 'ZONES';
+          else if (/(مومنتوم|شتاب\s*روند|momentum)/i.test(_iq)) _indKind = 'MOMENTUM';
+          if (_indKind && IND_ASK.test(_iq) && !IND_EXCLUDE.test(_iq) && !detectWhyQuery(userMsg) &&
+              queryAnalysis.intent.primary !== 'WHAT_IF' && queryAnalysis.intent.primary !== 'SCENARIO_COMPARISON') {
+            try {
+              const _iTf = (queryAnalysis.context && queryAnalysis.context.timeframe) ? queryAnalysis.context.timeframe : null;
+              const indicatorPayload = await fetchIndicatorEvidence(_indKind, queryAnalysis.entities, _iTf, env);
+              if (indicatorPayload) {
+                const indicatorReply = buildIndicatorResponse(indicatorPayload);
+                if (indicatorReply) {
+                  return new Response(JSON.stringify({
+                    success: true,
+                    reply: indicatorReply,
+                    source: 'DETERMINISTIC_HISTORICAL_METRICS',
+                    responseLevel: RESPONSE_LEVELS.STANDARD,
+                    interpretation: formatStructuredLog(queryAnalysis, retrievedKnowledge),
+                    retrievedKnowledge,
+                    unifiedEvidence: unifiedEvidenceContract,
+                    timestamp: new Date().toISOString()
+                  }), { headers: corsHeaders });
+                }
+              }
+            } catch (indicatorErr) { /* شکست محاسبه/واکشی ⇒ ادامه مسیر عادی (بدون مسیر امتناع جدید) */ }
+          }
+        }
+
         // ۳.۶. گارد قابلیت افق زمانی (Phase 2-3C): بدون جانشینی LIVE به‌جای HISTORICAL/FORECAST
         const tfCtx = (queryAnalysis.context && queryAnalysis.context.timeframe) ? queryAnalysis.context.timeframe : null;
         const missingCaps = (unifiedEvidenceContract.capabilities && Array.isArray(unifiedEvidenceContract.capabilities.missingEvidence))
@@ -760,6 +794,12 @@ export default {
               const simRes = executeWhatIfSimulation(whatIfAst, normalizedEvidence);
               whatIfReply = renderWhatIfResponse(simRes);
               if (whatIfBaseNote && simRes && simRes.status === 'SUCCESS' && whatIfReply) whatIfReply += whatIfBaseNote;
+            }
+
+            // Phase 2-3H (M14/ب — مصوبه مالک): الحاق بلوک زمینه آماری به ارائه سناریو (فقط لایه ارائه؛ پارسر فریزشده دست‌نخورده).
+            if (whatIfReply) {
+              const _scenCtx = await buildScenarioIndicatorContext(queryAnalysis.entities, env);
+              if (_scenCtx) whatIfReply += _scenCtx;
             }
 
             if (whatIfReply) {
@@ -3986,6 +4026,168 @@ function buildMetricsResponse(payload) {
       `• ${windowLine}\n\n${pastOnlyLine}`;
   }
   return null;
+}
+
+/* ==========================================================================
+   Phase 2-3H (M14) — اندیکاتورهای قطعی: RSI-14 (وایلدر)، نواحی آماری پنجره، مومنتوم چندروزه
+   اصول: محاسبه فقط از نقاط واقعی سری M1 (daily_snapshots)؛ داده ناکافی ⇒ امتناع صادقانه با ذکر عمق؛
+   برچسب DERIVED (مشتق از سری HISTORICAL) صریح؛ ارائه الزاماً توصیفی و ضدسیگنال — هیچ توصیه/پیش‌بینی تولید نمی‌شود.
+   === M14_FUNCTIONS_START === */
+const M14_RSI_PERIOD = 14;
+
+function computeRsiM14(points, period = M14_RSI_PERIOD) {
+  if (!Array.isArray(points) || points.length < period + 1) return null;
+  const gains = [], losses = [];
+  for (let i = 1; i < points.length; i++) {
+    const d = points[i].price - points[i - 1].price;
+    gains.push(d > 0 ? d : 0);
+    losses.push(d < 0 ? -d : 0);
+  }
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 0; i < period; i++) { avgGain += gains[i]; avgLoss += losses[i]; }
+  avgGain /= period; avgLoss /= period;
+  for (let i = period; i < gains.length; i++) {
+    avgGain = (avgGain * (period - 1) + gains[i]) / period;
+    avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+  }
+  const rsi = avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - (100 / (1 + (avgGain / avgLoss)));
+  return { rsi: Number(rsi.toFixed(1)), period, usedPoints: points.length, firstDate: points[0].date, lastDate: points[points.length - 1].date };
+}
+
+function computeZonesM14(points) {
+  if (!Array.isArray(points) || points.length < METRICS_MIN_RETURNS + 1) return null;
+  let lo = points[0], hi = points[0];
+  points.forEach((pt) => { if (pt.price < lo.price) lo = pt; if (pt.price > hi.price) hi = pt; });
+  const last = points[points.length - 1];
+  const distLowPct = ((last.price - lo.price) / lo.price) * 100;
+  const distHighPct = ((hi.price - last.price) / hi.price) * 100;
+  return {
+    low: lo, high: hi, last,
+    distLowPct: Number(distLowPct.toFixed(2)), distHighPct: Number(distHighPct.toFixed(2)),
+    usedPoints: points.length, firstDate: points[0].date, lastDate: last.date
+  };
+}
+
+function computeMomentumM14(points) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  const last = points[points.length - 1];
+  const roc = (n) => {
+    if (points.length < n + 1) return null;
+    const base = points[points.length - 1 - n];
+    if (!base || !(base.price > 0)) return null;
+    return Number((((last.price - base.price) / base.price) * 100).toFixed(2));
+  };
+  let streak = 0, dir = 0;
+  for (let i = points.length - 1; i >= 1; i--) {
+    const d = Math.sign(points[i].price - points[i - 1].price);
+    if (d === 0) break;
+    if (dir === 0) { dir = d; streak = 1; }
+    else if (d === dir) streak++;
+    else break;
+  }
+  return { roc5: roc(5), roc10: roc(10), streak, streakDir: dir, usedPoints: points.length, firstDate: points[0].date, lastDate: last.date };
+}
+/* === M14_FUNCTIONS_END === */
+
+const M14_ANTI_SIGNAL_LINE = 'این اندیکاتور صرفاً توصیف آماری گذشتهٔ پنجرهٔ موجود است؛ سیگنال خرید/فروش نیست و هیچ قابلیت پیش\u200cبینی ندارد.';
+
+async function fetchIndicatorEvidence(kind, entities, tf, env) {
+  const windowDays = Math.max(historicalWindowDays(tf) || 31, kind === 'RSI' ? (M14_RSI_PERIOD + 2) : 0);
+  const mapped = [...new Set((Array.isArray(entities) ? entities : [])
+    .map((e) => String((e && e.value) || '').toUpperCase())
+    .filter((a) => HISTORICAL_ASSET_KEY_MAP[a]))];
+  if (mapped.length < 1) return null;
+  const a = mapped[0];
+  const series = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[a]], windowDays, env);
+  const s = series[HISTORICAL_ASSET_KEY_MAP[a]] || [];
+  if (s.length === 0) return null;
+  const base = {
+    kind, asset: a,
+    unit: HISTORICAL_ASSET_UNITS[HISTORICAL_ASSET_KEY_MAP[a]] || '',
+    windowDays, n: s.length,
+    firstDate: s[0].date, lastDate: s[s.length - 1].date
+  };
+  if (kind === 'RSI') {
+    const r = computeRsiM14(s);
+    if (!r) return Object.assign(base, { insufficient: true, needed: M14_RSI_PERIOD + 1 });
+    return Object.assign(base, r);
+  }
+  if (kind === 'ZONES') {
+    const z = computeZonesM14(s);
+    if (!z) return Object.assign(base, { insufficient: true, needed: METRICS_MIN_RETURNS + 1 });
+    return Object.assign(base, z);
+  }
+  if (kind === 'MOMENTUM') {
+    const m = computeMomentumM14(s);
+    if (!m || (m.roc5 === null && m.roc10 === null)) return Object.assign(base, { insufficient: true, needed: 6 });
+    return Object.assign(base, m);
+  }
+  return null;
+}
+
+function buildIndicatorResponse(payload) {
+  if (!payload) return null;
+  const label = METRICS_ASSET_LABELS_FA[payload.asset] || payload.asset;
+  const faPrice = (v) => toFaDigits(Math.round(Number(v)).toLocaleString('en-US'));
+  const windowLine = `بازه واقعی محاسبه: ${payload.firstDate} تا ${payload.lastDate} (${toFaDigits(payload.n)} نقطه روزانه ثبت\u200cشده — منبع: سری HISTORICAL رسمی)`;
+
+  if (payload.insufficient) {
+    return `📏 **داده کافی برای محاسبه این اندیکاتور موجود نیست.**\n\n` +
+      `برای «${label}» تنها ${toFaDigits(payload.n)} نقطه روزانه در پنجره ${toFaDigits(payload.windowDays)} روزه ثبت شده ` +
+      `(حداقل لازم: ${toFaDigits(payload.needed)}). عمق داده روزانه در حال رشد است؛ هیچ مقدار تقریبی یا جایگزینی ساخته نمی\u200cشود.`;
+  }
+
+  if (payload.kind === 'RSI') {
+    const zone = payload.rsi > 70 ? 'بالای محدوده مرسوم ۷۰ (توصیف موقعیت، نه توصیه)' :
+      (payload.rsi < 30 ? 'پایین محدوده مرسوم ۳۰ (توصیف موقعیت، نه توصیه)' : 'داخل محدوده میانی ۳۰ تا ۷۰');
+    return `📈 **RSI-${toFaDigits(payload.period)} ${label}: ${toFaDigits(payload.rsi.toFixed(1))}** (DERIVED — مشتق قطعی از سری تاریخی)\n\n` +
+      `• موقعیت توصیفی: ${zone}\n` +
+      `• ${windowLine}\n\n${M14_ANTI_SIGNAL_LINE}`;
+  }
+
+  if (payload.kind === 'ZONES') {
+    return `📐 **نواحی آماری پنجره ${toFaDigits(payload.n)} نقطه\u200cای ${label}** (DERIVED — کمینه/بیشینه واقعی سری تاریخی)\n\n` +
+      `• کف پنجره (حمایت آماری): ${faPrice(payload.low.price)} ${payload.unit} — ثبت ${payload.low.date}\n` +
+      `• سقف پنجره (مقاومت آماری): ${faPrice(payload.high.price)} ${payload.unit} — ثبت ${payload.high.date}\n` +
+      `• آخرین قیمت ثبت\u200cشده (${payload.last.date}): ${faPrice(payload.last.price)} ${payload.unit} — فاصله از کف: ${toFaDigits(payload.distLowPct.toFixed(2))}٪ • تا سقف: ${toFaDigits(payload.distHighPct.toFixed(2))}٪\n` +
+      `• ${windowLine}\n\n` +
+      `این سطوح صرفاً کمینه و بیشینه آماری بازه موجودند، نه سطوح تکنیکال پیش\u200cبینانه. ${M14_ANTI_SIGNAL_LINE}`;
+  }
+
+  if (payload.kind === 'MOMENTUM') {
+    const fmtRoc = (v) => (v === null ? 'داده کافی در این عمق ثبت نشده' : `${v >= 0 ? '+' : '−'}${toFaDigits(Math.abs(v).toFixed(2))}٪`);
+    const streakLine = payload.streak > 0
+      ? `${toFaDigits(payload.streak)} روز متوالی ${payload.streakDir > 0 ? 'افزایش' : 'کاهش'} ثبت\u200cشده (توصیف دنباله اخیر)`
+      : 'آخرین دو نقطه ثبت\u200cشده هم\u200cقیمت بوده\u200cاند';
+    return `📊 **مومنتوم چندروزه ${label}** (DERIVED — تغییر درصدی واقعی سری تاریخی)\n\n` +
+      `• تغییر ${toFaDigits(5)} روزه: ${fmtRoc(payload.roc5)}\n` +
+      `• تغییر ${toFaDigits(10)} روزه: ${fmtRoc(payload.roc10)}\n` +
+      `• دنباله اخیر: ${streakLine}\n` +
+      `• ${windowLine}\n\n${M14_ANTI_SIGNAL_LINE}`;
+  }
+  return null;
+}
+
+// M14/ب (مصوبه مالک): بلوک زمینه آماری الحاقی به ارائه سناریو — فقط لایه ارائه؛ هر خطا ⇒ رشته خالی (سناریو بدون بلوک).
+async function buildScenarioIndicatorContext(entities, env) {
+  try {
+    const mapped = [...new Set((Array.isArray(entities) ? entities : [])
+      .map((e) => String((e && e.value) || '').toUpperCase())
+      .filter((a) => HISTORICAL_ASSET_KEY_MAP[a]))];
+    if (mapped.length < 1) return '';
+    const a = mapped[0];
+    const series = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[a]], 31, env);
+    const s = series[HISTORICAL_ASSET_KEY_MAP[a]] || [];
+    if (s.length === 0) return '';
+    const label = METRICS_ASSET_LABELS_FA[a] || a;
+    const rsi = computeRsiM14(s);
+    const mom = computeMomentumM14(s);
+    const parts = [];
+    if (rsi) parts.push(`RSI-${toFaDigits(rsi.period)}: ${toFaDigits(rsi.rsi.toFixed(1))}`);
+    if (mom && mom.roc5 !== null) parts.push(`مومنتوم ${toFaDigits(5)} روزه: ${mom.roc5 >= 0 ? '+' : '−'}${toFaDigits(Math.abs(mom.roc5).toFixed(2))}٪`);
+    if (parts.length === 0) return '';
+    return `\n\n📎 **زمینه آماری ${label}** (DERIVED از سری تاریخی تا ${s[s.length - 1].date}): ${parts.join(' • ')} — توصیف گذشته است؛ نه سیگنال، نه پیش\u200cبینی، و مستقل از مفروضات فرضی سناریو.`;
+  } catch (e) { return ''; }
 }
 
 async function retrieveKnowledge(knowledgeQuery, envOrDb = null, options = {}) {
