@@ -738,7 +738,10 @@ export default {
               timestamp: new Date().toISOString()
             }), { headers: corsHeaders });
           }
-          let whatIfAst = parseWhatIfQuery(s4EffectiveMsg || s6EffectiveMsg || userMsg, history); // Phase 2-3G-CX (P1-4/S4) + Phase 2-3H (M6/T2: S6)
+          // Phase 2-3H (M15-C FIX): بافت دارایی سناریو فقط از نوبت‌های کاربر — متن دستیار (مثلاً خط همراه ساختاری تتر) هرگز
+          // دارایی پیش‌فرض شوک را تعیین نمی‌کند (هم‌راستا با اصل E-3 فاز 2-3C: متن دستیار به موتورهای تحلیل نمی‌رود)
+          const whatIfUserHistory = Array.isArray(history) ? history.filter(h => h && h.role === 'user') : [];
+          let whatIfAst = parseWhatIfQuery(s4EffectiveMsg || s6EffectiveMsg || userMsg, whatIfUserHistory); // Phase 2-3G-CX (P1-4/S4) + Phase 2-3H (M6/T2: S6)
           // Phase 2-3G-CX (P0-1): ابهام «مقدار» جدا نگه داشته می‌شود تا مسیر بازسازی سناریوی حافظه (2-3C/2-3E-B) بدون هیچ تغییری اجرا شود
           let whatIfMagnitudeClarify = null;
           if (whatIfAst && whatIfAst.status === 'AMBIGUOUS' && Array.isArray(whatIfAst.missing) && whatIfAst.missing.includes('magnitude')) {
@@ -760,7 +763,7 @@ export default {
                 const dirFa = a.direction === 'DOWN' ? 'پایین' : 'بالا';
                 return (i === 0 ? 'اگر ' : '') + faLabel + ' ' + ResponsePresentation.toFaDigits(String(a.value)) + '٪ ' + dirFa + ' بره';
               });
-              const mergedAst = parseWhatIfQuery(chainParts.join(' و '), history);
+              const mergedAst = parseWhatIfQuery(chainParts.join(' و '), whatIfUserHistory);
               if (mergedAst && Array.isArray(mergedAst.assumptions) && mergedAst.assumptions.length >= 2) whatIfAst = mergedAst;
             }
             const scResolved = (!whatIfAst && !multiShockInMessage && queryAnalysis.context && queryAnalysis.context.scenario) ? queryAnalysis.context.scenario : null;
@@ -770,7 +773,7 @@ export default {
               const faLabel = (entResolved && entResolved.raw) ? entResolved.raw : ResponsePresentation.assetLabel(scResolved.asset);
               const dirFa = scResolved.direction === 'DOWN' ? 'پایین' : 'بالا';
               const effectiveWhatIfQuery = 'اگر ' + faLabel + ' ' + ResponsePresentation.toFaDigits(String(scResolved.value)) + '٪ ' + dirFa + ' بره';
-              whatIfAst = parseWhatIfQuery(effectiveWhatIfQuery, history);
+              whatIfAst = parseWhatIfQuery(effectiveWhatIfQuery, whatIfUserHistory);
             }
           }
           // Phase 2-3G-CX (P0-1): بازسازی از حافظه ممکن نشد → پل شفاف‌سازی مقدار شوک (نه fallback عمومی)

@@ -8,6 +8,9 @@
 - Chat RSI replies upgraded to `computeRsiPackM15` (full Canon v1.1 pack) with additive lines: rule-based interpretation label + two-part saturation tone (§1.1.a), 1-day RSI delta, saturation persistence. Momentum replies gain the dual-horizon reading (M5×M10 matrix). All three indicator reply kinds gain a pair-companion line via `payload.pairCompanion` (companion series fetched in try/catch — never breaks the main reply). All frozen M14 strings preserved verbatim.
 - What-If «زمینه آماری» block: adds rule-based combined summary (interpretCombinedM15) and the pair-companion segment (companion RSI + spread); every sub-section silently drops on error.
 
+## M15-C hotfix — scenario context from user turns only (2026-10-17)
+- Live-acceptance regression (C-3): the new tether companion line in assistant history hijacked parseWhatIfQuery's context-asset scan (USDT matched before USD) => follow-up "if it rises 10%" produced an empty-assumption scenario. Fixed at the chat call sites only (frozen parser internals untouched): scenario context history filtered to user turns (whatIfUserHistory), consistent with the Phase 2-3C E-3 principle.
+
 ## M15-B — Indicator boxes endpoint + rule-based interpretation layer (2026-10-17)
 - New `GET /api/indicators?window=7|14|30`: single canonical source for market-intelligence indicator boxes (same M1 daily series as chat/scenarios).
 - Reuses frozen M14 functions; new derivations computed on-the-fly from the same series (no storage, no schema change): `ma21_slope_pct_1d`, `rsi_delta_1d`, RSI saturation persistence, `ma21_cross_1d`, `ma21_side_streak`, `trend_regime` (sign-agreement only), distance trend.
