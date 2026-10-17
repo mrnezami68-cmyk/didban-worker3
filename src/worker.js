@@ -1918,8 +1918,38 @@ const ResponsePresentation = (() => {
 
     const tail = '\n\nبرای تحلیل عمیق‌تر یا سناریوی فرضی، بپرسید مثلاً: «اگر ۱۰٪ بالا بره چه می‌شود؟»';
 
-    return head + lines.join('\n') + tail;
+    // Phase 2-3H (M15-C / B1): زوج ساختاری دلار🔗تتر — سیاست مالک: هرجا وضعیت یکی گزارش شد، دیگری هم همراه شود (متقارن، الحاقی)
+    const companion = buildUsdUsdtCompanionM15C(wanted, items);
+    const companionBlock = companion ? `\n${companion}` : '';
+
+    return head + lines.join('\n') + companionBlock + tail;
   };
+
+  /* Phase 2-3H (M15-C / B1) — خط همراه ساختاری زوج دلار🔗تتر (متقارن؛ فقط الحاقی؛ داده غایب ⇒ اعلام صادقانه)
+     === M15C_COMPANION_START === */
+  const buildUsdUsdtCompanionM15C = (wantedAssets, liveItems) => {
+    const wanted = (Array.isArray(wantedAssets) ? wantedAssets : []).map((a) => String(a || '').toUpperCase());
+    const hasUsd = wanted.includes('USD'), hasUsdt = wanted.includes('USDT');
+    if (hasUsd === hasUsdt) return null; // هر دو خواسته شده یا هیچ‌کدام ⇒ خط همراه لازم نیست
+    const companionAsset = hasUsd ? 'USDT' : 'USD';
+    const items = Array.isArray(liveItems) ? liveItems : [];
+    const findValid = (a) => items.find((x) => x && String(x.asset || '').toUpperCase() === a &&
+      x.value !== null && x.value !== undefined && x.value !== '' && Number.isFinite(Number(x.value)));
+    const label = companionAsset === 'USDT' ? 'تتر' : 'دلار آزاد';
+    const compItem = findValid(companionAsset);
+    if (!compItem) return `🔗 **${label} (همراه ساختاری):** داده لحظه‌ای در دسترس نیست.`;
+    let line = `🔗 **${label} (همراه ساختاری):** **${fmtNumber(compItem.value, 0)} تومان**`;
+    const chRaw = compItem.metadata ? compItem.metadata.change24h : null;
+    const ch = (chRaw === null || chRaw === undefined || chRaw === '' || !Number.isFinite(Number(chRaw))) ? null : Number(chRaw);
+    if (ch !== null) line += ` — تغییر روزانه: **${ch > 0 ? '+' : (ch < 0 ? '-' : '')}${fmtNumber(ch, 2)}٪**`;
+    const usdItem = findValid('USD'), usdtItem = findValid('USDT');
+    if (usdItem && usdtItem && Number(usdItem.value) > 0) {
+      const spread = ((Number(usdtItem.value) - Number(usdItem.value)) / Number(usdItem.value)) * 100;
+      line += ` — اسپرد تتر/دلار: **${spread > 0 ? '+' : (spread < 0 ? '-' : '')}${fmtNumber(spread, 2)}٪**`;
+    }
+    return line;
+  };
+  /* === M15C_COMPANION_END === */
 
   /* ==========================================================================
      ۷) پاسخ قطعی «چرا» (WHY) در نبود مسیر مدل زبانی — ساختار §14/§15:
@@ -1982,6 +2012,10 @@ const ResponsePresentation = (() => {
       }
       obsLines.push(line);
     });
+
+    // Phase 2-3H (M15-C / B1): همراه ساختاری دلار🔗تتر در تحلیل «چرا» (متقارن، الحاقی)
+    const whyCompanion = buildUsdUsdtCompanionM15C(target, items);
+    if (whyCompanion) obsLines.push(whyCompanion);
 
     const observation = obsLines.length > 0
       ? obsLines.join('\n')
@@ -4123,9 +4157,34 @@ async function fetchIndicatorEvidence(kind, entities, tf, env) {
     windowDays, n: s.length,
     firstDate: s[0].date, lastDate: s[s.length - 1].date
   };
+  // Phase 2-3H (M15-C / B1): همراه ساختاری زوج دلار🔗تتر در پاسخ‌های اندیکاتوری (متقارن، الحاقی)
+  if (a === 'USD' || a === 'USDT') {
+    try {
+      const compAsset = a === 'USD' ? 'USDT' : 'USD';
+      const compSeries = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[compAsset]], windowDays, env);
+      const cs = compSeries[HISTORICAL_ASSET_KEY_MAP[compAsset]] || [];
+      if (cs.length > 0) {
+        const compRsi = computeRsiM14(cs);
+        const compMom = computeMomentumM14(cs);
+        const lastSelf = s[s.length - 1], lastComp = cs[cs.length - 1];
+        const usdLast = a === 'USD' ? lastSelf.price : lastComp.price;
+        const usdtLast = a === 'USDT' ? lastSelf.price : lastComp.price;
+        base.pairCompanion = {
+          asset: compAsset,
+          label: METRICS_ASSET_LABELS_FA[compAsset] || compAsset,
+          rsi: compRsi ? compRsi.rsi : null,
+          roc5: compMom ? compMom.roc5 : null,
+          lastPrice: lastComp.price,
+          lastDate: lastComp.date,
+          spreadPct: usdLast > 0 ? Number((((usdtLast - usdLast) / usdLast) * 100).toFixed(2)) : null
+        };
+      }
+    } catch (e) { /* همراه زوج اختیاری است — خطا هرگز پاسخ اصلی را نمی‌شکند */ }
+  }
   if (kind === 'RSI') {
-    const r = computeRsiM14(s);
-    if (!r) return Object.assign(base, { insufficient: true, needed: M14_RSI_PERIOD + 1 });
+    // Phase 2-3H (M15-C): بسته کامل RSI (دلتای یک‌روزه + ماندگاری اشباع) — همان قرارداد قبلی + فیلدهای الحاقی
+    const r = computeRsiPackM15(s);
+    if (r.insufficient) return Object.assign(base, { insufficient: true, needed: M14_RSI_PERIOD + 1 });
     return Object.assign(base, r);
   }
   if (kind === 'ZONES') {
@@ -4153,11 +4212,36 @@ function buildIndicatorResponse(payload) {
       `(حداقل لازم: ${toFaDigits(payload.needed)}). عمق داده روزانه در حال رشد است؛ هیچ مقدار تقریبی یا جایگزینی ساخته نمی\u200cشود.`;
   }
 
+  // Phase 2-3H (M15-C): خط همراه ساختاری زوج دلار🔗تتر (الحاقی — سیاست مالک)
+  const pairLine = (() => {
+    const pc = payload.pairCompanion;
+    if (!pc) return '';
+    const bits = [];
+    if (payload.kind === 'RSI' && pc.rsi !== null) bits.push(`RSI-${toFaDigits(14)}: ${toFaDigits(Number(pc.rsi).toFixed(1))}`);
+    if (payload.kind === 'MOMENTUM' && pc.roc5 !== null) bits.push(`تغییر ${toFaDigits(5)} روزه: ${pc.roc5 >= 0 ? '+' : '\u2212'}${toFaDigits(Math.abs(pc.roc5).toFixed(2))}٪`);
+    bits.push(`آخرین ثبت (${pc.lastDate}): ${faPrice(pc.lastPrice)} تومان`);
+    if (pc.spreadPct !== null) bits.push(`اسپرد تتر/دلار: ${pc.spreadPct >= 0 ? '+' : '\u2212'}${toFaDigits(Math.abs(pc.spreadPct).toFixed(2))}٪`);
+    return `• 🔗 ${pc.label} (همراه ساختاری زوج): ${bits.join(' • ')}\n`;
+  })();
+
   if (payload.kind === 'RSI') {
     const zone = payload.rsi > 70 ? 'بالای محدوده مرسوم ۷۰ (توصیف موقعیت، نه توصیه)' :
       (payload.rsi < 30 ? 'پایین محدوده مرسوم ۳۰ (توصیف موقعیت، نه توصیه)' : 'داخل محدوده میانی ۳۰ تا ۷۰');
+    // Phase 2-3H (M15-C): تفسیر قاعده‌مند Canon v1.1 — خطوط الحاقی (رشته‌های فریزشده M14 دست‌نخورده)
+    let canonLines = '';
+    try {
+      const it = interpretRsiM15(payload);
+      if (it) {
+        canonLines = `• تفسیر قاعده‌مند: ${it.label} — ${it.note}\n`;
+        if (it.deltaLine) canonLines += `• روند یک‌روزه: ${it.deltaLine}\n`;
+        if (payload.persistenceDays > 1 && payload.persistenceZone) {
+          canonLines += `• ماندگاری: ${toFaDigits(payload.persistenceDays)} مشاهده متوالی در محدوده ${payload.persistenceZone === 'OVERBOUGHT' ? 'بالای ۷۰' : 'زیر ۳۰'}\n`;
+        }
+      }
+    } catch (e) { canonLines = ''; }
     return `📈 **RSI-${toFaDigits(payload.period)} ${label}: ${toFaDigits(payload.rsi.toFixed(1))}** (DERIVED — مشتق قطعی از سری تاریخی)\n\n` +
       `• موقعیت توصیفی: ${zone}\n` +
+      canonLines + pairLine +
       `• ${windowLine}\n\n${M14_ANTI_SIGNAL_LINE}`;
   }
 
@@ -4166,6 +4250,7 @@ function buildIndicatorResponse(payload) {
       `• کف پنجره (حمایت آماری): ${faPrice(payload.low.price)} ${payload.unit} — ثبت ${payload.low.date}\n` +
       `• سقف پنجره (مقاومت آماری): ${faPrice(payload.high.price)} ${payload.unit} — ثبت ${payload.high.date}\n` +
       `• آخرین قیمت ثبت\u200cشده (${payload.last.date}): ${faPrice(payload.last.price)} ${payload.unit} — فاصله از کف: ${toFaDigits(payload.distLowPct.toFixed(2))}٪ • تا سقف: ${toFaDigits(payload.distHighPct.toFixed(2))}٪\n` +
+      pairLine +
       `• ${windowLine}\n\n` +
       `این سطوح صرفاً کمینه و بیشینه آماری بازه موجودند، نه سطوح تکنیکال پیش\u200cبینانه. ${M14_ANTI_SIGNAL_LINE}`;
   }
@@ -4175,10 +4260,17 @@ function buildIndicatorResponse(payload) {
     const streakLine = payload.streak > 0
       ? `${toFaDigits(payload.streak)} روز متوالی ${payload.streakDir > 0 ? 'افزایش' : 'کاهش'} ثبت\u200cشده (توصیف دنباله اخیر)`
       : 'آخرین دو نقطه ثبت\u200cشده هم\u200cقیمت بوده\u200cاند';
+    // Phase 2-3H (M15-C): خوانش دوافقی Canon — خط الحاقی
+    let dualLine = '';
+    try {
+      const dm = interpretMomentumM15({ roc5: payload.roc5, roc10: payload.roc10 });
+      if (dm) dualLine = `• خوانش دوافقی: ${dm}\n`;
+    } catch (e) { dualLine = ''; }
     return `📊 **مومنتوم چندروزه ${label}** (DERIVED — تغییر درصدی واقعی سری تاریخی)\n\n` +
       `• تغییر ${toFaDigits(5)} روزه: ${fmtRoc(payload.roc5)}\n` +
       `• تغییر ${toFaDigits(10)} روزه: ${fmtRoc(payload.roc10)}\n` +
       `• دنباله اخیر: ${streakLine}\n` +
+      dualLine + pairLine +
       `• ${windowLine}\n\n${M14_ANTI_SIGNAL_LINE}`;
   }
   return null;
@@ -4202,7 +4294,36 @@ async function buildScenarioIndicatorContext(entities, env) {
     if (rsi) parts.push(`RSI-${toFaDigits(rsi.period)}: ${toFaDigits(rsi.rsi.toFixed(1))}`);
     if (mom && mom.roc5 !== null) parts.push(`مومنتوم ${toFaDigits(5)} روزه: ${mom.roc5 >= 0 ? '+' : '−'}${toFaDigits(Math.abs(mom.roc5).toFixed(2))}٪`);
     if (parts.length === 0) return '';
-    return `\n\n📎 **زمینه آماری ${label}** (DERIVED از سری تاریخی تا ${s[s.length - 1].date}): ${parts.join(' • ')} — توصیف گذشته است؛ نه سیگنال، نه پیش\u200cبینی، و مستقل از مفروضات فرضی سناریو.`;
+    // Phase 2-3H (M15-C): جمع‌بندی قاعده‌مند Canon §۵ — فقط جمله‌های جدول؛ خطا ⇒ حذف بی‌صدا
+    let combinedLine = '';
+    try {
+      const rsiPack = computeRsiPackM15(s);
+      const ma = computeMa21M15(s);
+      const combined = interpretCombinedM15(rsiPack, ma, mom);
+      if (combined) combinedLine = ` جمع\u200cبندی قاعده\u200cمند: ${combined}.`;
+    } catch (e) { combinedLine = ''; }
+    // Phase 2-3H (M15-C / B2): همراه ساختاری زوج دلار🔗تتر در زمینه سناریو (متقارن، الحاقی)
+    let pairSegment = '';
+    try {
+      if (a === 'USD' || a === 'USDT') {
+        const compAsset = a === 'USD' ? 'USDT' : 'USD';
+        const compSeries = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[compAsset]], 31, env);
+        const cs = compSeries[HISTORICAL_ASSET_KEY_MAP[compAsset]] || [];
+        if (cs.length > 0) {
+          const compRsi = computeRsiM14(cs);
+          const usdLast = a === 'USD' ? s[s.length - 1].price : cs[cs.length - 1].price;
+          const usdtLast = a === 'USDT' ? s[s.length - 1].price : cs[cs.length - 1].price;
+          const compBits = [];
+          if (compRsi) compBits.push(`RSI-${toFaDigits(14)}: ${toFaDigits(compRsi.rsi.toFixed(1))}`);
+          if (usdLast > 0) {
+            const spread = ((usdtLast - usdLast) / usdLast) * 100;
+            compBits.push(`اسپرد تتر/دلار: ${spread >= 0 ? '+' : '−'}${toFaDigits(Math.abs(spread).toFixed(2))}٪`);
+          }
+          if (compBits.length > 0) pairSegment = ` 🔗 ${METRICS_ASSET_LABELS_FA[compAsset]} (همراه ساختاری زوج): ${compBits.join(' • ')}.`;
+        }
+      }
+    } catch (e) { pairSegment = ''; }
+    return `\n\n📎 **زمینه آماری ${label}** (DERIVED از سری تاریخی تا ${s[s.length - 1].date}): ${parts.join(' • ')} — توصیف گذشته است؛ نه سیگنال، نه پیش\u200cبینی، و مستقل از مفروضات فرضی سناریو.${combinedLine}${pairSegment}`;
   } catch (e) { return ''; }
 }
 
@@ -5282,6 +5403,10 @@ function buildUnifiedEvidenceContract(params = {}) {
   } else if (cir.evidencePlan && Array.isArray(cir.evidencePlan.required) && cir.evidencePlan.required.length > 0) {
     const allowed = new Set([...cir.evidencePlan.required, ...((cir.evidencePlan && cir.evidencePlan.optional) || [])]);
     entities.forEach(e => allowed.add(e));
+    // Phase 2-3H (M15-C / B1): زوج ساختاری دلار🔗تتر — حضور یکی در شواهد مجاز، دیگری را هم مجاز می‌کند
+    // (فقط افزودن شاهد؛ هیچ شاهدی حذف نمی‌شود — سیاست مالک: دلار و تتر «عملاً یکی هستند»)
+    if (allowed.has('USD')) allowed.add('USDT');
+    if (allowed.has('USDT')) allowed.add('USD');
     liveFilter = Array.from(allowed);
   } else if (!cir.requiresLiveEvidence) {
     // پرسش دانشنامه‌ای / مفهومی: داده زنده وارد کانتکست نمی‌شود
