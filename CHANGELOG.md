@@ -2,6 +2,11 @@
 
 ---
 
+## M16-الف — بسته داده واقعی پاسخ تحلیلی (2026-10-25، مصوب گ-الف-۳۲)
+
+- `buildM16AssetDataPackA` (مارکر M16A_DATA_PACK) + هوک الحاقی در مونتاژ نهایی پاسخ چت برای قصدهای تحلیلی (ASSET_ANALYSIS/MARKET_ANALYSIS، بدون «چرا» — حفظ قرارداد فریز B2/T12): قیمت فعلی+٪۲۴س از شواهد زنده، RSI-۱۴ توصیفی Canon، جایگاه MA-۲۱، سقف/کف ۷/۱۴/۳۰ «محدوده‌های مهم اخیر (توصیفی، نه سیگنال)»، تذکر ثابت ضدسیگنال. جزء غایب ⇒ حذف بی‌صدا؛ خطا ⇒ پاسخ اصلی دست‌نخورده؛ کاملاً قطعی (بدون LLM — لایه نگارش = M16-ب جدا).
+- خط ویژگی سلامت: `m16DataPackA: ENABLED`. سوئیت v292 در مخزن اصلی (۹ سنجه، این‌همانی بیت‌به‌بیت دوقلو).
+
 ## M15-C — USD🔗USDT structural-pair companion + Canon-grade chat indicator replies (2026-10-17)
 - New `buildUsdUsdtCompanionM15C` inside the ResponsePresentation mirror block (frontend mirror updated identically): market-status and WHY replies about only one of USD/USDT now append the companion's live price, daily change and USDT/USD spread (owner policy: symmetric pair). Both requested ⇒ no duplication; missing data ⇒ honest absence line.
 - Evidence-plan coupling: allowing USD in live evidence also allows USDT and vice versa (additive only).

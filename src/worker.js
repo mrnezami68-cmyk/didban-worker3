@@ -179,6 +179,7 @@ export default {
         knowledgeHardening: 'ENABLED (Phase 2-3F-B3-KH KH-01..KH-06 Canonical Relevance Policy & Boundary Safety v1.0)',
         knowledgeCoverage: 'ENABLED (Phase 2-3F-B3-KB Knowledge Base Completion & Coverage v1.0 — P0/P1/P2 + Market Structure, 34 canonical entries)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
+        m16DataPackA: 'ENABLED (Phase 2-3H M16-A Deterministic Real-Data Analysis Pack v1.0)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
           active: ['LIVE', 'DERIVED', 'HYPOTHETICAL', 'KNOWLEDGE'],
@@ -866,6 +867,17 @@ export default {
             }
           }
         }
+
+        // Phase 2-3H (M16-الف): بسته داده واقعی پاسخ تحلیلی — الحاقی و قطعی؛ خطا هرگز پاسخ اصلی را نمی‌شکند
+        try {
+          const m16Intent = (queryAnalysis && queryAnalysis.intent) ? queryAnalysis.intent.primary : null;
+          // پرسش‌های «چرا» مستثنا — قرارداد فریزشده B2/T12: در تحلیل علت، فقط اعداد شواهد جاری مجازند
+          if (replyText && (m16Intent === 'ASSET_ANALYSIS' || m16Intent === 'MARKET_ANALYSIS') && !detectWhyQuery(userMsg)) {
+            const m16Block = await buildM16AssetDataPackA(queryAnalysis.entities,
+              (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.live)) ? unifiedEvidenceContract.evidence.live : [], env);
+            if (m16Block) replyText += m16Block;
+          }
+        } catch (m16Err) { /* حذف بی‌صدا — پاسخ اصلی دست‌نخورده */ }
 
         // Phase 2-3G-CX (P1-2/S3): سطر «مرتبط از دانش‌نامه» برای پاسخ تحلیلی جفت‌دارایی — خطا هرگز پاسخ اصلی را نمی‌شکند
         try {
@@ -4337,6 +4349,67 @@ async function buildScenarioIndicatorContext(entities, env) {
    هیچ ذخیره جدید و هیچ تغییر schema؛ null هرگز ۰ نمی‌شود؛ داده ناکافی ⇒ null صادقانه + حداقل لازم.
    === M15_FUNCTIONS_START === */
 const M15_FORMULA_VERSION = 'm15.1';
+/* Phase 2-3H (M16-الف) — بسته داده واقعی پاسخ تحلیلی ماکان (قطعی، بدون LLM؛ مصوب گ-الف-۳۲)
+   قرارداد: قیمت فعلی + ٪۲۴س از شواهد زنده + RSI-14 توصیفی + جایگاه نسبت به MA-21 + سقف/کف ۷/۱۴/۳۰ روزه
+   به‌عنوان «محدوده‌های مهم اخیر» (توصیفی، نه سیگنال). هر جزء غایب ⇒ حذف بی‌صدای همان جزء؛ هرگز عدد ساختگی.
+   === M16A_DATA_PACK_START === */
+async function buildM16AssetDataPackA(entities, liveItems, env) {
+  try {
+    const mapped = [...new Set((Array.isArray(entities) ? entities : [])
+      .map((e) => String((e && e.value) || '').toUpperCase())
+      .filter((k) => HISTORICAL_ASSET_KEY_MAP[k]))];
+    if (mapped.length < 1) return '';
+    const a = mapped[0];
+    const label = METRICS_ASSET_LABELS_FA[a] || a;
+    const faNum = (v, d = 0) => toFaDigits(Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
+    const signedPct = (v) => `${v > 0 ? '+' : (v < 0 ? '\u2212' : '')}${faNum(Math.abs(v), 2)}\u066a`;
+    const lines = [];
+    // ۱) قیمت فعلی + ٪۲۴س — فقط از شواهد زنده موجود (بدون هیچ جایگزین‌سازی)
+    const items = Array.isArray(liveItems) ? liveItems : [];
+    const li = items.find((x) => x && String(x.asset || '').toUpperCase() === a &&
+      x.value !== null && x.value !== undefined && x.value !== '' && Number.isFinite(Number(x.value)));
+    if (li) {
+      let priceLine = `• قیمت فعلی: **${faNum(li.value)}${li.unit ? ' ' + li.unit : ''}**`;
+      const chRaw = li.metadata ? li.metadata.change24h : null;
+      if (chRaw !== null && chRaw !== undefined && chRaw !== '' && Number.isFinite(Number(chRaw))) {
+        priceLine += ` — تغییر ۲۴ساعته: **${signedPct(Number(chRaw))}**`;
+      }
+      lines.push(priceLine);
+    }
+    // ۲) سری روزانه آرشیو رسمی — RSI توصیفی + جایگاه MA-21 + محدوده‌های مهم (همگی DERIVED؛ داده ناکافی ⇒ حذف جزء)
+    const series = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[a]], 31, env);
+    const s = series[HISTORICAL_ASSET_KEY_MAP[a]] || [];
+    let lastDate = null;
+    if (s.length > 0) {
+      lastDate = s[s.length - 1].date;
+      const rsiPack = computeRsiPackM15(s);
+      if (rsiPack && !rsiPack.insufficient) {
+        const it = interpretRsiM15(rsiPack);
+        lines.push(`• RSI-${toFaDigits(14)}: **${toFaDigits(Number(rsiPack.rsi).toFixed(1))}**${it && it.label ? ` — ${it.label}` : ''}`);
+      }
+      const ma = computeMa21M15(s);
+      if (ma && !ma.insufficient && ma.distancePct !== null && ma.side !== 'ON') {
+        lines.push(`• جایگاه نسبت به میانگین ${toFaDigits(21)}روزه: **${ma.side === 'ABOVE' ? 'بالاتر' : 'پایین‌تر'}** با فاصله ${faNum(Math.abs(ma.distancePct), 2)}\u066a (MA-${toFaDigits(21)}: ${faNum(ma.sma21)})`);
+      } else if (ma && !ma.insufficient && ma.side === 'ON') {
+        lines.push(`• جایگاه نسبت به میانگین ${toFaDigits(21)}روزه: روی میانگین (MA-${toFaDigits(21)}: ${faNum(ma.sma21)})`);
+      }
+      const rangeBits = [];
+      for (const w of M15_WINDOWS) {
+        if (s.length >= w) {
+          const win = s.slice(-w).map((p) => p.price).filter((p) => Number.isFinite(p) && p > 0);
+          if (win.length === w) {
+            rangeBits.push(`${toFaDigits(w)}روزه: کف ${faNum(Math.min(...win))} / سقف ${faNum(Math.max(...win))}`);
+          }
+        }
+      }
+      if (rangeBits.length > 0) lines.push(`• محدوده‌های مهم اخیر (توصیفی، نه سیگنال): ${rangeBits.join(' • ')}`);
+    }
+    if (lines.length === 0) return '';
+    return `\n\n📊 **بسته داده واقعی ${label}**${lastDate ? ` (DERIVED از آرشیو رسمی تا ${lastDate})` : ''}:\n${lines.join('\n')}\n_این بسته صرفاً توصیف داده‌های ثبت‌شده است؛ نه سیگنال، نه پیش‌بینی و نه توصیه خرید/فروش._`;
+  } catch (e) { return ''; }
+}
+/* === M16A_DATA_PACK_END === */
+
 const M15_SMA_PERIOD = 21;
 const M15_ASSETS = ['USD', 'USDT', 'GOLD18', 'COIN', 'BTC', 'ETH']; // ترتیب ثابت مصوب: دلار🔗تتر، طلا۱۸، سکه، BTC، ETH
 const M15_WINDOWS = [7, 14, 30];
