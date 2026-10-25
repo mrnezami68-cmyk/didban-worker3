@@ -876,7 +876,12 @@ export default {
           if (replyText && (m16Intent === 'ASSET_ANALYSIS' || m16Intent === 'MARKET_ANALYSIS') && !detectWhyQuery(userMsg)) {
             const m16Block = await buildM16AssetDataPackA(queryAnalysis.entities,
               (unifiedEvidenceContract.evidence && Array.isArray(unifiedEvidenceContract.evidence.live)) ? unifiedEvidenceContract.evidence.live : [], env);
-            if (m16Block) replyText += m16Block;
+            if (m16Block) {
+              // یافته ارزیابی مالک: قالب «شناخته‌نشده» + بسته داده = پاسخ متناقض ⇒ سرآیند قطعی جایگزین می‌شود
+              replyText = replyText.includes('قالب‌های تحلیلی شناخته‌شده')
+                ? ('🔎 **وضعیت بر پایه داده‌های ثبت‌شده (قطعی):**' + m16Block)
+                : (replyText + m16Block);
+            }
           }
         } catch (m16Err) { /* حذف بی‌صدا — پاسخ اصلی دست‌نخورده */ }
 
@@ -4370,7 +4375,8 @@ async function buildM16AssetDataPackA(entities, liveItems, env) {
     const li = items.find((x) => x && String(x.asset || '').toUpperCase() === a &&
       x.value !== null && x.value !== undefined && x.value !== '' && Number.isFinite(Number(x.value)));
     if (li) {
-      let priceLine = `• قیمت فعلی: **${faNum(li.value)}${li.unit ? ' ' + li.unit : ''}**`;
+      const unitFa = HISTORICAL_ASSET_UNITS[HISTORICAL_ASSET_KEY_MAP[a]] || li.unit || ''; // واحد کانونیکال — واحد خام کلاینت (مثل TOMAN انگلیسی/غلط) ملاک نیست
+      let priceLine = `• قیمت فعلی: **${faNum(li.value)}${unitFa ? ' ' + unitFa : ''}**`;
       const chRaw = li.metadata ? li.metadata.change24h : null;
       if (chRaw !== null && chRaw !== undefined && chRaw !== '' && Number.isFinite(Number(chRaw))) {
         priceLine += ` — تغییر ۲۴ساعته: **${signedPct(Number(chRaw))}**`;
@@ -4412,7 +4418,7 @@ async function buildM16AssetDataPackA(entities, liveItems, env) {
         const compBits = [];
         const cli = items.find((x) => x && String(x.asset || '').toUpperCase() === compA &&
           x.value !== null && x.value !== undefined && x.value !== '' && Number.isFinite(Number(x.value)));
-        if (cli) compBits.push(`قیمت: ${faNum(cli.value)}${cli.unit ? ' ' + cli.unit : ''}`);
+        if (cli) { const cUnit = HISTORICAL_ASSET_UNITS[HISTORICAL_ASSET_KEY_MAP[compA]] || cli.unit || ''; compBits.push(`قیمت: ${faNum(cli.value)}${cUnit ? ' ' + cUnit : ''}`); }
         const compSeries = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[compA]], 31, env);
         const cs = compSeries[HISTORICAL_ASSET_KEY_MAP[compA]] || [];
         if (cs.length > 0) {
@@ -5723,7 +5729,7 @@ function parseSingleWhatIf(text, recentContext = []) {
 
     // استخراج مقدار عددی با ضرایب فارسی (هزار، میلیون، میلیارد)
     let numVal = null;
-    const numMatch = enClause.match(/([0-9]+(?:\.[0-9]+)?)\s*(هزار|میلیون|میلیارد|k|m|b)?/i);
+    const numMatch = enClause.replace(/([0-9]+(?:\.[0-9]+)?)\s*عیار/g, 'عیار').match(/([0-9]+(?:\.[0-9]+)?)\s*(هزار|میلیون|میلیارد|k|m|b)?/i); // M16-ج (یافته مالک): عدد «عیار» جزء نام دارایی است، نه مقدار سناریو
     if (numMatch) {
       let rawNum = parseFloat(numMatch[1]);
       const mult = (numMatch[2] || '').toLowerCase();
