@@ -4405,6 +4405,31 @@ async function buildM16AssetDataPackA(entities, liveItems, env) {
       }
       if (rangeBits.length > 0) lines.push(`• محدوده‌های مهم اخیر (توصیفی، نه سیگنال): ${rangeBits.join(' • ')}`);
     }
+    // Phase 2-3H (M15-C/B1 در M16): زوج ساختاری دلار🔗تتر — سیاست مالک: هرجا وضعیت یکی گزارش شد، دیگری همراه شود (الحاقی، متقارن؛ خطا ⇒ حذف بی‌صدا)
+    if ((a === 'USD' || a === 'USDT') && lines.length > 0) {
+      try {
+        const compA = a === 'USD' ? 'USDT' : 'USD';
+        const compBits = [];
+        const cli = items.find((x) => x && String(x.asset || '').toUpperCase() === compA &&
+          x.value !== null && x.value !== undefined && x.value !== '' && Number.isFinite(Number(x.value)));
+        if (cli) compBits.push(`قیمت: ${faNum(cli.value)}${cli.unit ? ' ' + cli.unit : ''}`);
+        const compSeries = await fetchDailySeries([HISTORICAL_ASSET_KEY_MAP[compA]], 31, env);
+        const cs = compSeries[HISTORICAL_ASSET_KEY_MAP[compA]] || [];
+        if (cs.length > 0) {
+          const cr = computeRsiPackM15(cs);
+          if (cr && !cr.insufficient) compBits.push(`RSI-${toFaDigits(14)}: ${toFaDigits(Number(cr.rsi).toFixed(1))}`);
+          if (s.length > 0) {
+            const usdLast = a === 'USD' ? s[s.length - 1].price : cs[cs.length - 1].price;
+            const usdtLast = a === 'USDT' ? s[s.length - 1].price : cs[cs.length - 1].price;
+            if (Number.isFinite(usdLast) && usdLast > 0 && Number.isFinite(usdtLast)) {
+              const spread = ((usdtLast - usdLast) / usdLast) * 100;
+              compBits.push(`اسپرد تتر/دلار: ${signedPct(spread)}`);
+            }
+          }
+        }
+        if (compBits.length > 0) lines.push(`• 🔗 ${METRICS_ASSET_LABELS_FA[compA] || compA} (همراه ساختاری زوج): ${compBits.join(' • ')}`);
+      } catch (ePair) { /* الحاقی — هرگز بسته اصلی را نمی‌شکند */ }
+    }
     if (lines.length === 0) return '';
     return `\n\n📊 **بسته داده واقعی ${label}**${lastDate ? ` (DERIVED از آرشیو رسمی تا ${lastDate})` : ''}:\n${lines.join('\n')}\n_این بسته صرفاً توصیف داده‌های ثبت‌شده است؛ نه سیگنال، نه پیش‌بینی و نه توصیه خرید/فروش._`;
   } catch (e) { return ''; }
