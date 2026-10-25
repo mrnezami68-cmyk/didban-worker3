@@ -180,6 +180,7 @@ export default {
         knowledgeCoverage: 'ENABLED (Phase 2-3F-B3-KB Knowledge Base Completion & Coverage v1.0 — P0/P1/P2 + Market Structure, 34 canonical entries)',
         identityProfile: 'ENABLED (Phase 2-3D Canonical Identity Profile v1.0 — MAKAN, deterministic tiered responses)',
         m16DataPackA: 'ENABLED (Phase 2-3H M16-A Deterministic Real-Data Analysis Pack v1.0)',
+        m16ComposerB: 'ENABLED (Phase 2-3H M16-B BeatAPI Narrative Composer v1.0 — digit-whitelist guarded, deterministic fallback)',
         responsePresentation: 'ENABLED (Phase 2-3C ResponsePresentation v1.0 — user-facing sanitizer & response levels)',
         evidenceSources: {
           active: ['LIVE', 'DERIVED', 'HYPOTHETICAL', 'KNOWLEDGE'],
@@ -853,7 +854,7 @@ export default {
 
           // کلید اطفای عملیاتی بدون deploy: env.LLM_NARRATION = 'off' ⇒ روایت کلاً غیرفعال
           const narrationEnabled = !(env && typeof env.LLM_NARRATION === 'string' && env.LLM_NARRATION.trim().toLowerCase() === 'off');
-          if (narrationEnabled && env && (env.AI || env.OPENROUTER_API_KEY) && checkDailyLlmEligible(clientIp, 40)) {
+          if (narrationEnabled && env && (env.BEATAPI_API_KEY || env.AI || env.OPENROUTER_API_KEY) && checkDailyLlmEligible(clientIp, 40)) {
             const narrated = await narrateDeterministicReply(replyText, {
               env,
               evidenceContract: unifiedEvidenceContract,
@@ -6627,7 +6628,42 @@ async function narrateDeterministicReply(deterministicText, ctx = {}) {
       { role: 'system', content: buildNarrationSystemPrompt(requestLevel) },
       { role: 'user', content: `متن قطعی برای بازنویسی روان (پرسش کاربر: «${String(ctx.userMsg || '').slice(0, 300)}»):\n\n${deterministicText}` }
     ];
-    if (env && env.AI) {
+  // Phase 2-3H (M16-ب، مصوب گ-الف-۳۲): درگاه نخست نگارش — BeatAPI (deepseek-v4.1-flash-free)؛
+  // همان اعتبارسنج سخت‌گیر M9 (whitelist عددی + ضدسیگنال + مرز طول) بر خروجی اعمال می‌شود؛
+  // شکست/رد ⇒ زنجیره قبلی (CF AI ← OpenRouter) و در نهایت متن قطعی دست‌نخورده (fallback M16-الف).
+  // === M16B_COMPOSER_START ===
+  const m16bEnabled = !(env && typeof env.M16B_COMPOSE === 'string' && env.M16B_COMPOSE.trim().toLowerCase() === 'off');
+  if (m16bEnabled && env && env.BEATAPI_API_KEY) {
+    try {
+      const baRes = await fetch('https://api.beatapi.io/v1/chat/completions', {
+        method: 'POST',
+        signal: AbortSignal.timeout(12000),
+        headers: {
+          'Authorization': `Bearer ${env.BEATAPI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: (env.BEATAPI_MODEL || 'deepseek-v4.1-flash-free'),
+          messages,
+          temperature: 0.2,
+          max_tokens: 1200 // الزام گیت M16: مدل reasoning پنهان دارد — سقف پایین‌تر پاسخ را می‌بُرد
+        })
+      });
+      if (baRes.ok) {
+        const baJson = await baRes.json();
+        rawNarration = baJson.choices?.[0]?.message?.content?.trim() || null;
+        if (rawNarration) meta.provider = 'BEATAPI_DEEPSEEK';
+        else meta.detail = 'BA_EMPTY_CHOICE';
+      } else {
+        meta.detail = 'BA_HTTP_' + baRes.status;
+      }
+    } catch (baErr) {
+      // شکست درگاه BeatAPI هرگز نگارش را نمی‌کشد — زنجیره بعدی ادامه می‌یابد
+      meta.detail = 'BA_ERR: ' + String(baErr && baErr.message).slice(0, 120);
+    }
+  }
+  // === M16B_COMPOSER_END ===
+    if (!rawNarration && env && env.AI) {
       try {
         const cfAiRes = await env.AI.run((env.CF_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'), {
           messages,
