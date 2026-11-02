@@ -4443,7 +4443,7 @@ async function buildM16AssetDataPackA(entities, liveItems, env) {
 /* === M16A_DATA_PACK_END === */
 
 const M15_SMA_PERIOD = 21;
-const M15_ASSETS = ['USD', 'USDT', 'GOLD18', 'COIN', 'BTC', 'ETH']; // ترتیب ثابت مصوب: دلار🔗تتر، طلا۱۸، سکه، BTC، ETH
+const M15_ASSETS = ['USD', 'USDT', 'GOLD18', 'COIN', 'XAG', 'XAU', 'BTC', 'ETH']; // گ-الف-۱۰۸ (رأی مالک 2026-11-01، استثنای فریز): + نقره و اونس جهانی — ترتیب آینه داشبورد؛ نگاشت‌ها/برچسب‌ها/واحدها از قبل موجود؛ صفر تغییر در فرمول‌ها و دارایی‌های قبلی
 const M15_WINDOWS = [7, 14, 30];
 
 function computeSmaAtM15(points, endIdx, period = M15_SMA_PERIOD) {

@@ -188,3 +188,6 @@
 ## [v3.0.0] — نسخه اولیه استقرار مستقل در گیت‌هاب و بیلد خودکار کلودفلر
 * استقرار مستقیم از طریق Cloudflare Workers Builds.
 * اتصال به دیتابیس‌های دوگانه D1 و هوش مصنوعی لبه Workers AI.
+
+## گ-الف-۱۰۸ — 2026-11-01
+feat(m15): add XAG (نقره) + XAU (اونس جهانی طلا) to /api/indicators — single-line M15_ASSETS extension per owner vote (Workers-freeze exception, scope-limited); formulas/labels/units untouched; existing assets byte-identical behavior.
